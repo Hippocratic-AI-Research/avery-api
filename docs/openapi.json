@@ -1,0 +1,798 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Conversations API",
+    "version": "1.0.0",
+    "description": "Create and drive an AI agent conversation with a patient, then retrieve its outcome.\n\n**Typical flow**\n\n1. `POST /v1/conversations` — start a conversation for an `agent_id` / `script_id` / `patient_id`. You get back a `conversation_id` and the agent's opening `greeting`.\n2. `POST /v1/conversations/{conversation_id}/messages` — send the patient's message and receive the agent's reply.\n3. `GET /v1/conversations/{conversation_id}` — fetch current state and message history at any time.\n4. `POST /v1/conversations/{conversation_id}/end` — end the conversation and receive a triage `disposition` (tier, recommended action, care gaps).\n5. `GET /v1/conversations/{conversation_id}/transcript` — fetch the full turn-by-turn transcript.\n\n**Authentication** — all requests use a bearer token: `Authorization: Bearer <token>`.\n\n> **Docs note:** the upstream OpenAPI source carries no field descriptions or examples. Descriptions and example values here were written for these docs by inferring meaning from field names and the conversation flow. Items marked _(inferred)_ — notably enum-like values such as `status`, `triage_tier`, `error_code`, and care-gap identifiers — are best guesses and should be confirmed by a service owner. The endpoint paths, methods, field names, types, and required/nullable flags are copied faithfully from the source spec."
+  },
+  "servers": [
+    {
+      "url": "https://api.example.com",
+      "description": "Placeholder base URL — replace with the real Conversations API base URL."
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "conversations",
+      "description": "Start, drive, inspect, and end AI agent conversations."
+    }
+  ],
+  "paths": {
+    "/v1/conversations": {
+      "post": {
+        "summary": "Create a conversation",
+        "operationId": "create_conversation",
+        "description": "Starts a new conversation between an agent and a patient using a given script. Returns the new `conversation_id` and the agent's opening greeting.",
+        "tags": ["conversations"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CreateConversationRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Conversation created.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CreateConversationResponse" }
+              }
+            }
+          },
+          "403": {
+            "description": "Not permitted to create a conversation for this agent/script/patient.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConversationError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Referenced agent, script, or patient was not found.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConversationError" }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicts with existing state (e.g. an active conversation already exists).",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConversationError" }
+              }
+            }
+          },
+          "422": {
+            "description": "Request body failed validation.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ValidationError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConversationError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/conversations/{conversation_id}": {
+      "get": {
+        "summary": "Get a conversation",
+        "operationId": "get_conversation",
+        "description": "Returns the current state of a conversation along with its message history.",
+        "tags": ["conversations"],
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "description": "Identifier returned by `create_conversation`.",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Conversation state and message history.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GetConversationResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConversationError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Not permitted to access this conversation.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConversationError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Conversation not found.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConversationError" }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid `conversation_id`.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConversationError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/conversations/{conversation_id}/end": {
+      "post": {
+        "summary": "End a conversation",
+        "operationId": "end_conversation",
+        "description": "Ends an active conversation and returns the final triage `disposition` (tier, recommended action, and surfaced/accepted/declined care gaps).",
+        "tags": ["conversations"],
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "description": "Identifier of the conversation to end.",
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/EndConversationRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Conversation ended; final disposition returned.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/EndConversationResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConversationError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Not permitted to end this conversation.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConversationError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Conversation not found.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConversationError" }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConversationError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/conversations/{conversation_id}/messages": {
+      "post": {
+        "summary": "Send a message",
+        "operationId": "send_message",
+        "description": "Sends a patient message into the conversation and returns the agent's reply. Any structured events generated while processing the message are included in `events`.",
+        "tags": ["conversations"],
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "description": "Identifier of the conversation to post the message to.",
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/SendMessageRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The agent's reply.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SendMessageResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConversationError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Not permitted to post to this conversation.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConversationError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Conversation not found.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConversationError" }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request (e.g. empty `text`, or conversation already ended).",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConversationError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/conversations/{conversation_id}/transcript": {
+      "get": {
+        "summary": "Get the transcript",
+        "operationId": "get_transcript",
+        "description": "Returns the full turn-by-turn transcript of the conversation.",
+        "tags": ["conversations"],
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "description": "Identifier of the conversation whose transcript to fetch.",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The conversation transcript.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/TranscriptResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConversationError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Not permitted to access this transcript.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConversationError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Conversation not found.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConversationError" }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid `conversation_id`.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConversationError" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Bearer token sent as `Authorization: Bearer <token>`."
+      }
+    },
+    "schemas": {
+      "CreateConversationRequest": {
+        "type": "object",
+        "title": "CreateConversationRequest",
+        "required": ["agent_id", "script_id", "patient_id"],
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id",
+            "description": "Identifier of the agent that will run the conversation."
+          },
+          "script_id": {
+            "type": "string",
+            "title": "Script Id",
+            "description": "Identifier of the script the agent should follow."
+          },
+          "patient_id": {
+            "type": "string",
+            "title": "Patient Id",
+            "description": "Identifier of the patient this conversation is with."
+          }
+        },
+        "example": {
+          "agent_id": "agt_8f2c1a",
+          "script_id": "scr_triage_v3",
+          "patient_id": "pat_4d9b77"
+        }
+      },
+      "CreateConversationResponse": {
+        "type": "object",
+        "title": "CreateConversationResponse",
+        "required": ["conversation_id", "created_at", "greeting"],
+        "properties": {
+          "conversation_id": {
+            "type": "string",
+            "title": "Conversation Id",
+            "description": "Identifier for the newly created conversation. Use it in all subsequent calls."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At",
+            "description": "When the conversation was created (ISO 8601)."
+          },
+          "greeting": { "$ref": "#/components/schemas/Greeting" }
+        },
+        "example": {
+          "conversation_id": "conv_01HX9ZQK7N",
+          "created_at": "2026-06-22T15:04:05Z",
+          "greeting": {
+            "text": "Hi, this is your care assistant calling to check in. How have you been feeling?"
+          }
+        }
+      },
+      "Greeting": {
+        "type": "object",
+        "title": "Greeting",
+        "required": ["text"],
+        "properties": {
+          "text": {
+            "type": "string",
+            "title": "Text",
+            "description": "The agent's opening message to the patient."
+          }
+        }
+      },
+      "GetConversationResponse": {
+        "type": "object",
+        "title": "GetConversationResponse",
+        "required": ["conversation_id", "status", "created_at", "agent_id", "script_id", "messages"],
+        "properties": {
+          "conversation_id": {
+            "type": "string",
+            "title": "Conversation Id",
+            "description": "Identifier of the conversation."
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "Current lifecycle status of the conversation, e.g. `active` or `ended`. _(inferred)_"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At",
+            "description": "When the conversation was created (ISO 8601)."
+          },
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id",
+            "description": "Agent running the conversation."
+          },
+          "script_id": {
+            "type": "string",
+            "title": "Script Id",
+            "description": "Script the agent is following."
+          },
+          "patient_id": {
+            "type": "string",
+            "nullable": true,
+            "title": "Patient Id",
+            "description": "Patient on the conversation. May be null."
+          },
+          "messages": {
+            "type": "array",
+            "title": "Messages",
+            "description": "Messages exchanged so far, in chronological order.",
+            "items": { "$ref": "#/components/schemas/Message" }
+          }
+        },
+        "example": {
+          "conversation_id": "conv_01HX9ZQK7N",
+          "status": "active",
+          "created_at": "2026-06-22T15:04:05Z",
+          "agent_id": "agt_8f2c1a",
+          "script_id": "scr_triage_v3",
+          "patient_id": "pat_4d9b77",
+          "messages": [
+            {
+              "message_id": "msg_a1",
+              "role": "assistant",
+              "text": "Hi, this is your care assistant calling to check in. How have you been feeling?",
+              "created_at": "2026-06-22T15:04:05Z"
+            },
+            {
+              "message_id": "msg_a2",
+              "role": "user",
+              "text": "I've had a headache since this morning.",
+              "created_at": "2026-06-22T15:04:32Z"
+            }
+          ]
+        }
+      },
+      "Message": {
+        "type": "object",
+        "title": "Message",
+        "description": "A single message in a conversation's history.",
+        "required": ["message_id", "role", "text", "created_at"],
+        "properties": {
+          "message_id": {
+            "type": "string",
+            "title": "Message Id",
+            "description": "Identifier of the message."
+          },
+          "role": {
+            "type": "string",
+            "title": "Role",
+            "description": "Who sent the message, e.g. `assistant` or `user`. _(inferred)_"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text",
+            "description": "Message content."
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At",
+            "description": "When the message was created (ISO 8601)."
+          }
+        }
+      },
+      "EndConversationRequest": {
+        "type": "object",
+        "title": "EndConversationRequest",
+        "required": ["reason"],
+        "properties": {
+          "reason": {
+            "type": "string",
+            "title": "Reason",
+            "description": "Why the conversation is being ended (free text)."
+          }
+        },
+        "example": {
+          "reason": "Patient requested to end the call."
+        }
+      },
+      "EndConversationResponse": {
+        "type": "object",
+        "title": "EndConversationResponse",
+        "required": ["conversation_id", "status", "disposition"],
+        "properties": {
+          "conversation_id": {
+            "type": "string",
+            "title": "Conversation Id",
+            "description": "Identifier of the ended conversation."
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "Lifecycle status after ending, e.g. `ended`. _(inferred)_"
+          },
+          "disposition": { "$ref": "#/components/schemas/Disposition" }
+        },
+        "example": {
+          "conversation_id": "conv_01HX9ZQK7N",
+          "status": "ended",
+          "disposition": {
+            "triage_tier": 3,
+            "triage_tier_label": "Urgent",
+            "triage_action": "See a provider within 24 hours",
+            "summary": "Patient reports a headache persisting since the morning with no red-flag symptoms.",
+            "care_gaps_surfaced": ["flu_vaccine", "a1c_screening"],
+            "care_gaps_accepted": ["flu_vaccine"],
+            "care_gaps_declined": ["a1c_screening"],
+            "follow_up_recommended": true,
+            "follow_up_cadence": "1_week"
+          }
+        }
+      },
+      "Disposition": {
+        "type": "object",
+        "title": "Disposition",
+        "description": "Final triage outcome of the conversation.",
+        "required": [
+          "triage_tier",
+          "triage_tier_label",
+          "triage_action",
+          "summary",
+          "care_gaps_surfaced",
+          "care_gaps_accepted",
+          "care_gaps_declined",
+          "follow_up_recommended",
+          "follow_up_cadence"
+        ],
+        "properties": {
+          "triage_tier": {
+            "type": "integer",
+            "title": "Triage Tier",
+            "description": "Numeric triage severity tier (higher = more acute). _(inferred range)_"
+          },
+          "triage_tier_label": {
+            "type": "string",
+            "title": "Triage Tier Label",
+            "description": "Human-readable label for the triage tier, e.g. `Urgent`. _(inferred)_"
+          },
+          "triage_action": {
+            "type": "string",
+            "title": "Triage Action",
+            "description": "Recommended next action for the patient."
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary",
+            "description": "Short summary of the conversation and reasoning."
+          },
+          "care_gaps_surfaced": {
+            "type": "array",
+            "title": "Care Gaps Surfaced",
+            "description": "Care gaps the agent raised during the conversation. _(values inferred)_",
+            "items": { "type": "string" }
+          },
+          "care_gaps_accepted": {
+            "type": "array",
+            "title": "Care Gaps Accepted",
+            "description": "Surfaced care gaps the patient agreed to address.",
+            "items": { "type": "string" }
+          },
+          "care_gaps_declined": {
+            "type": "array",
+            "title": "Care Gaps Declined",
+            "description": "Surfaced care gaps the patient declined.",
+            "items": { "type": "string" }
+          },
+          "follow_up_recommended": {
+            "type": "boolean",
+            "title": "Follow Up Recommended",
+            "description": "Whether a follow-up is recommended."
+          },
+          "follow_up_cadence": {
+            "type": "string",
+            "title": "Follow Up Cadence",
+            "description": "Recommended follow-up cadence, e.g. `1_week`. _(inferred)_"
+          }
+        }
+      },
+      "SendMessageRequest": {
+        "type": "object",
+        "title": "SendMessageRequest",
+        "required": ["text"],
+        "properties": {
+          "text": {
+            "type": "string",
+            "title": "Text",
+            "description": "The patient's message to send into the conversation."
+          }
+        },
+        "example": {
+          "text": "I've had a headache since this morning."
+        }
+      },
+      "SendMessageResponse": {
+        "type": "object",
+        "title": "SendMessageResponse",
+        "required": ["message_id", "text"],
+        "properties": {
+          "message_id": {
+            "type": "string",
+            "title": "Message Id",
+            "description": "Identifier of the agent's reply message."
+          },
+          "text": {
+            "type": "string",
+            "title": "Text",
+            "description": "The agent's reply text."
+          },
+          "events": {
+            "type": "array",
+            "title": "Events",
+            "default": [],
+            "description": "Structured events emitted while processing the message (the exact event shape is event-specific and not constrained here).",
+            "items": { "type": "object" }
+          }
+        },
+        "example": {
+          "message_id": "msg_a3",
+          "text": "I'm sorry you're dealing with that. How would you rate the pain from 1 to 10?",
+          "events": []
+        }
+      },
+      "TranscriptResponse": {
+        "type": "object",
+        "title": "TranscriptResponse",
+        "required": ["conversation_id", "status", "started_at", "utterances"],
+        "properties": {
+          "conversation_id": {
+            "type": "string",
+            "title": "Conversation Id",
+            "description": "Identifier of the conversation."
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "Lifecycle status of the conversation. _(inferred)_"
+          },
+          "started_at": {
+            "type": "string",
+            "title": "Started At",
+            "description": "When the conversation started (ISO 8601)."
+          },
+          "ended_at": {
+            "type": "string",
+            "nullable": true,
+            "title": "Ended At",
+            "description": "When the conversation ended (ISO 8601), or null if still active."
+          },
+          "utterances": {
+            "type": "array",
+            "title": "Utterances",
+            "description": "Turn-by-turn utterances in chronological order.",
+            "items": { "$ref": "#/components/schemas/TranscriptUtterance" }
+          }
+        },
+        "example": {
+          "conversation_id": "conv_01HX9ZQK7N",
+          "status": "ended",
+          "started_at": "2026-06-22T15:04:05Z",
+          "ended_at": "2026-06-22T15:09:48Z",
+          "utterances": [
+            {
+              "role": "assistant",
+              "text": "Hi, this is your care assistant calling to check in. How have you been feeling?",
+              "timestamp": "2026-06-22T15:04:05Z"
+            },
+            {
+              "role": "user",
+              "text": "I've had a headache since this morning.",
+              "timestamp": "2026-06-22T15:04:32Z"
+            }
+          ]
+        }
+      },
+      "TranscriptUtterance": {
+        "type": "object",
+        "title": "TranscriptUtterance",
+        "required": ["role", "text", "timestamp"],
+        "properties": {
+          "role": {
+            "type": "string",
+            "title": "Role",
+            "description": "Who spoke, e.g. `assistant` or `user`. _(inferred)_"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text",
+            "description": "What was said."
+          },
+          "timestamp": {
+            "type": "string",
+            "title": "Timestamp",
+            "description": "When the utterance occurred (ISO 8601)."
+          }
+        }
+      },
+      "ConversationError": {
+        "type": "object",
+        "title": "ConversationError",
+        "required": ["error_code"],
+        "properties": {
+          "error_code": {
+            "type": "string",
+            "title": "Error Code",
+            "description": "Machine-readable error code, e.g. `conversation_not_found`. _(value inferred)_"
+          }
+        },
+        "example": {
+          "error_code": "conversation_not_found"
+        }
+      },
+      "ValidationError": {
+        "type": "array",
+        "title": "ValidationError",
+        "description": "Model of a validation error response.",
+        "items": { "$ref": "#/components/schemas/ValidationErrorElement" }
+      },
+      "ValidationErrorElement": {
+        "type": "object",
+        "title": "ValidationErrorElement",
+        "description": "Model of a validation error response element.",
+        "required": ["loc", "msg", "type"],
+        "properties": {
+          "loc": {
+            "type": "array",
+            "title": "Missing field name",
+            "items": { "type": "string" }
+          },
+          "msg": {
+            "type": "string",
+            "title": "Error message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error type"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Error context"
+          }
+        },
+        "example": {
+          "loc": ["body", "agent_id"],
+          "msg": "Field required",
+          "type": "missing"
+        }
+      }
+    }
+  }
+}
