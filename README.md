@@ -2,7 +2,7 @@
 
 Interactive reference for the `v1/conversations/*` endpoints, rendered with [Scalar](https://github.com/scalar/scalar) and served from GitHub Pages.
 
-**Live:** https://hai-nelsonwang.github.io/avery-api
+**Live:** https://friendly-adventure-9m971qg.pages.github.io/ (private — org members only)
 
 ## Files
 
