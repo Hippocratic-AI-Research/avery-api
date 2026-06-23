@@ -2,7 +2,7 @@
 
 Interactive reference for the `v1/conversations/*` endpoints, rendered with [Scalar](https://github.com/scalar/scalar) and served from GitHub Pages.
 
-**Live:** https://friendly-adventure-9m971qg.pages.github.io/ (private — org members only)
+**Live:** https://hippocratic-ai-research.github.io/avery-api (once the repo is made public; currently private, served at https://friendly-adventure-9m971qg.pages.github.io/)
 
 ## Files
 
