@@ -9,10 +9,11 @@ Interactive reference for the `v1/conversations/*` endpoints, rendered with [Sca
 - `docs/index.html` — Scalar, loaded from CDN, pointed at `docs/openapi.json`.
 - `docs/openapi.json` — a self-contained, conversations-only OpenAPI 3.1 spec (the 5 endpoints + the schemas they use), with descriptions and examples added for these docs.
 
-## Before sharing — two things to set
+## Before sharing — confirm the inferred bits
 
-1. **Real base URL.** `docs/openapi.json` ships with a placeholder. Edit `servers[0].url` (`https://api.example.com`) to the real Conversations API base URL so the "Send Request" client hits it.
-2. **Confirm the inferred bits.** The upstream spec had no field docs, so descriptions/examples were written by inference. Anything marked _(inferred)_ — `status`, `triage_tier`, `role`, `error_code`, care-gap and cadence values — is a guess; have a service owner confirm.
+The upstream spec had no field docs, so descriptions/examples were written by inference. Anything marked _(inferred)_ — `status`, `call_disposition`, `triage_tier`, `role`, `error_code`, `idempotency_key` behavior, care-gap and cadence values — is a guess; have a service owner confirm.
+
+`servers[0].url` is set to `https://api.safetyportal.hippocraticai.com` so the "Send Request" client hits the real API.
 
 ## Local preview
 

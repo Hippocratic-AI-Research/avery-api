@@ -3,12 +3,12 @@
   "info": {
     "title": "Conversations API",
     "version": "1.0.0",
-    "description": "Create and drive an AI agent conversation with a patient, then retrieve its outcome.\n\n**Typical flow**\n\n1. `POST /v1/conversations` — start a conversation for an `agent_id` / `script_id` / `patient_id`. You get back a `conversation_id` and the agent's opening `greeting`.\n2. `POST /v1/conversations/{conversation_id}/messages` — send the patient's message and receive the agent's reply.\n3. `GET /v1/conversations/{conversation_id}` — fetch current state and message history at any time.\n4. `POST /v1/conversations/{conversation_id}/end` — end the conversation and receive a triage `disposition` (tier, recommended action, care gaps).\n5. `GET /v1/conversations/{conversation_id}/transcript` — fetch the full turn-by-turn transcript.\n\n**Authentication** — all requests use a bearer token: `Authorization: Bearer <token>`.\n\n> **Docs note:** the upstream OpenAPI source carries no field descriptions or examples. Descriptions and example values here were written for these docs by inferring meaning from field names and the conversation flow. Items marked _(inferred)_ — notably enum-like values such as `status`, `triage_tier`, `error_code`, and care-gap identifiers — are best guesses and should be confirmed by a service owner. The endpoint paths, methods, field names, types, and required/nullable flags are copied faithfully from the source spec."
+    "description": "Create and drive an AI agent conversation with a patient, then retrieve its outcome.\n\n**Typical flow**\n\n1. `POST /v1/conversations` — start a conversation for an `agent_id` / `script_id` / `patient_id`. You get back a `conversation_id` and the agent's opening `greeting`.\n2. `POST /v1/conversations/{conversation_id}/messages` — send the patient's message and receive the agent's reply.\n3. `GET /v1/conversations/{conversation_id}` — fetch current state and message history at any time.\n4. `POST /v1/conversations/{conversation_id}/end` — end the conversation and receive a `call_disposition` plus a triage `disposition` (tier, recommended action, care gaps; `disposition` may be null if no triage was produced).\n5. `GET /v1/conversations/{conversation_id}/transcript` — fetch the full turn-by-turn transcript.\n\n**Authentication** — all requests use a bearer token: `Authorization: Bearer <token>`.\n\n> **Docs note:** the upstream OpenAPI source carries no field descriptions or examples. Descriptions and example values here were written for these docs by inferring meaning from field names and the conversation flow. Items marked _(inferred)_ — notably enum-like values such as `status`, `triage_tier`, `error_code`, and care-gap identifiers — are best guesses and should be confirmed by a service owner. The endpoint paths, methods, field names, types, and required/nullable flags are copied faithfully from the source spec."
   },
   "servers": [
     {
-      "url": "https://api.example.com",
-      "description": "Placeholder base URL — replace with the real Conversations API base URL."
+      "url": "https://api.safetyportal.hippocraticai.com",
+      "description": "Conversations API base URL."
     }
   ],
   "security": [
@@ -180,14 +180,6 @@
               }
             }
           },
-          "401": {
-            "description": "Missing or invalid bearer token.",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/ConversationError" }
-              }
-            }
-          },
           "403": {
             "description": "Not permitted to end this conversation.",
             "content": {
@@ -204,8 +196,24 @@
               }
             }
           },
+          "409": {
+            "description": "Conversation is not in a state that can be ended (e.g. already ended).",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConversationError" }
+              }
+            }
+          },
           "422": {
             "description": "Invalid request.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConversationError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/ConversationError" }
@@ -271,8 +279,24 @@
               }
             }
           },
+          "409": {
+            "description": "Conversation is not accepting messages (e.g. already ended).",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConversationError" }
+              }
+            }
+          },
           "422": {
             "description": "Invalid request (e.g. empty `text`, or conversation already ended).",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConversationError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error.",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/ConversationError" }
@@ -324,6 +348,14 @@
           },
           "404": {
             "description": "Conversation not found.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConversationError" }
+              }
+            }
+          },
+          "409": {
+            "description": "Transcript not available in the conversation's current state.",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/ConversationError" }
@@ -433,6 +465,7 @@
           },
           "created_at": {
             "type": "string",
+            "format": "date-time",
             "title": "Created At",
             "description": "When the conversation was created (ISO 8601)."
           },
@@ -505,6 +538,7 @@
           },
           "created_at": {
             "type": "string",
+            "format": "date-time",
             "title": "Created At",
             "description": "When the message was created (ISO 8601)."
           }
@@ -528,23 +562,27 @@
       "EndConversationResponse": {
         "type": "object",
         "title": "EndConversationResponse",
-        "required": ["conversation_id", "status", "disposition"],
+        "required": ["conversation_id", "call_disposition"],
         "properties": {
           "conversation_id": {
             "type": "string",
             "title": "Conversation Id",
             "description": "Identifier of the ended conversation."
           },
-          "status": {
+          "call_disposition": {
             "type": "string",
-            "title": "Status",
-            "description": "Lifecycle status after ending, e.g. `ended`. _(inferred)_"
+            "title": "Call Disposition",
+            "description": "Outcome of the call/conversation overall, e.g. `completed`, `no_answer`, or `voicemail`. _(values inferred)_"
           },
-          "disposition": { "$ref": "#/components/schemas/Disposition" }
+          "disposition": {
+            "$ref": "#/components/schemas/Disposition",
+            "nullable": true,
+            "description": "Triage outcome of the conversation. Null when no triage disposition was produced (e.g. the call did not complete)."
+          }
         },
         "example": {
           "conversation_id": "conv_01HX9ZQK7N",
-          "status": "ended",
+          "call_disposition": "completed",
           "disposition": {
             "triage_tier": 3,
             "triage_tier_label": "Urgent",
@@ -633,10 +671,17 @@
             "type": "string",
             "title": "Text",
             "description": "The patient's message to send into the conversation."
+          },
+          "idempotency_key": {
+            "type": "string",
+            "nullable": true,
+            "title": "Idempotency Key",
+            "description": "Optional client-supplied key to safely retry the same send without creating a duplicate message. _(inferred behavior)_"
           }
         },
         "example": {
-          "text": "I've had a headache since this morning."
+          "text": "I've had a headache since this morning.",
+          "idempotency_key": "8f14e45f-ce7e-4b0a-9c2a-1d2e3f4a5b6c"
         }
       },
       "SendMessageResponse": {
@@ -671,7 +716,7 @@
       "TranscriptResponse": {
         "type": "object",
         "title": "TranscriptResponse",
-        "required": ["conversation_id", "status", "started_at", "utterances"],
+        "required": ["conversation_id", "status", "started_at", "messages"],
         "properties": {
           "conversation_id": {
             "type": "string",
@@ -685,20 +730,22 @@
           },
           "started_at": {
             "type": "string",
+            "format": "date-time",
             "title": "Started At",
             "description": "When the conversation started (ISO 8601)."
           },
           "ended_at": {
             "type": "string",
+            "format": "date-time",
             "nullable": true,
             "title": "Ended At",
             "description": "When the conversation ended (ISO 8601), or null if still active."
           },
-          "utterances": {
+          "messages": {
             "type": "array",
-            "title": "Utterances",
-            "description": "Turn-by-turn utterances in chronological order.",
-            "items": { "$ref": "#/components/schemas/TranscriptUtterance" }
+            "title": "Messages",
+            "description": "Turn-by-turn messages in chronological order.",
+            "items": { "$ref": "#/components/schemas/Message" }
           }
         },
         "example": {
@@ -706,40 +753,20 @@
           "status": "ended",
           "started_at": "2026-06-22T15:04:05Z",
           "ended_at": "2026-06-22T15:09:48Z",
-          "utterances": [
+          "messages": [
             {
+              "message_id": "msg_a1",
               "role": "assistant",
               "text": "Hi, this is your care assistant calling to check in. How have you been feeling?",
-              "timestamp": "2026-06-22T15:04:05Z"
+              "created_at": "2026-06-22T15:04:05Z"
             },
             {
+              "message_id": "msg_a2",
               "role": "user",
               "text": "I've had a headache since this morning.",
-              "timestamp": "2026-06-22T15:04:32Z"
+              "created_at": "2026-06-22T15:04:32Z"
             }
           ]
-        }
-      },
-      "TranscriptUtterance": {
-        "type": "object",
-        "title": "TranscriptUtterance",
-        "required": ["role", "text", "timestamp"],
-        "properties": {
-          "role": {
-            "type": "string",
-            "title": "Role",
-            "description": "Who spoke, e.g. `assistant` or `user`. _(inferred)_"
-          },
-          "text": {
-            "type": "string",
-            "title": "Text",
-            "description": "What was said."
-          },
-          "timestamp": {
-            "type": "string",
-            "title": "Timestamp",
-            "description": "When the utterance occurred (ISO 8601)."
-          }
         }
       },
       "ConversationError": {
