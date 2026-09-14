@@ -3,12 +3,20 @@
   "info": {
     "title": "Conversations API",
     "version": "1.0.0",
-    "description": "Create and drive an AI agent conversation with a patient, then retrieve its outcome.\n\n**Typical flow**\n\n1. `POST /v1/conversations` — start a conversation for an `agent_id` / `script_id` / `patient_id`. You get back a `conversation_id` and the agent's opening `greeting`.\n2. `POST /v1/conversations/{conversation_id}/messages` — send the patient's message and receive the agent's reply.\n3. `GET /v1/conversations/{conversation_id}` — fetch current state and message history at any time.\n4. `POST /v1/conversations/{conversation_id}/end` — end the conversation and receive a `call_disposition` plus a triage `disposition` (tier, recommended action, care gaps; `disposition` may be null if no triage was produced).\n5. `GET /v1/conversations/{conversation_id}/transcript` — fetch the full turn-by-turn transcript.\n\n**Authentication** — all requests use a bearer token: `Authorization: Bearer <token>`.\n\n> **Docs note:** the upstream OpenAPI source carries no field descriptions or examples. Descriptions and example values here were written for these docs by inferring meaning from field names and the conversation flow. Items marked _(inferred)_ — notably enum-like values such as `status`, `triage_tier`, `error_code`, and care-gap identifiers — are best guesses and should be confirmed by a service owner. The endpoint paths, methods, field names, types, and required/nullable flags are copied faithfully from the source spec."
+    "description": "Create and drive a text conversation between an AI agent and a patient, then retrieve its outcome.\n\n**New here?** Start with the [Integration Guide](./guide.html) — environments (Safety Portal / UAT / Production), minting a token, the end-to-end flow with `curl` examples, and the event-handling rules. This page is the field-by-field reference.\n\n**Typical flow**\n\n1. `POST /v1/conversations` — start a conversation for an `agent_id` / `script_id` / `patient_id`. You get back a `conversation_id` and the agent's opening `greeting`.\n2. `POST /v1/conversations/{conversation_id}/messages` — send the patient's message and receive the agent's reply, plus any `events` raised during that turn.\n3. `GET /v1/conversations/{conversation_id}` — fetch current status and full message history (with events replayed) at any time, including after the conversation has ended.\n4. `POST /v1/conversations/{conversation_id}/end` — end the conversation and receive its `call_disposition`.\n5. `GET /v1/conversations/{conversation_id}/transcript` — fetch the turn-by-turn transcript of an ended conversation.\n\n**Authentication** — every request carries `Authorization: Bearer <token>`. Tokens are OAuth 2.0 client-credentials access tokens issued to your integration during onboarding (issuer, audience, `client_id` and `client_secret` are provided then). Read endpoints require the `read:chat_messages` scope; write endpoints require `write:chat_messages`. All data is scoped to the partner the token was issued to — a conversation, patient, script or agent that belongs to another partner is reported as not found.\n\n**Concurrency** — keep at most one in-flight `POST .../messages` per conversation. A second concurrent send is rejected with `409 message_processing_busy`; retry it after the first completes.\n\n**Events** — the `events` array on a message response is the signal channel for things the client UI should react to: an `escalation` being detected / evaluated / resolved, a `transfer_to_human`, or an `end_call`. Each event object carries a `type` discriminator. The same events are replayed on `GET /v1/conversations/{conversation_id}` so a client that lost a response can recover them. See the `Event` schema for the exact shapes and the rules for handling them.\n\n**Errors** — failures return `{ \"error_code\", \"message\" }` (see `ConversationError`). `error_code` is a stable machine-readable string; `message` is human-readable and may change. Two exceptions: authentication failures (`401`, `403` from the bearer token itself) return the HTTP status with no JSON body, and a malformed `conversation_id` returns `400` with `{ \"error\": \"...\" }`.\n\n**Retries** — `409 message_processing_busy` and `503` responses are transient; back off and retry. Use `idempotency_key` on sends so a retry after a lost response returns the original reply instead of running a new turn.\n\n_Generated from the service's OpenAPI source and verified against the implementation on 2026-09-14._"
   },
   "servers": [
     {
+      "url": "https://api.portal.us.hippocraticai.com",
+      "description": "Production (US)."
+    },
+    {
+      "url": "https://uat-api.portal.us.hippocraticai.com",
+      "description": "UAT (US)."
+    },
+    {
       "url": "https://api.safetyportal.hippocraticai.com",
-      "description": "Conversations API base URL."
+      "description": "Safety Portal environment."
     }
   ],
   "security": [
@@ -27,7 +35,7 @@
       "post": {
         "summary": "Create a conversation",
         "operationId": "create_conversation",
-        "description": "Starts a new conversation between an agent and a patient using a given script. Returns the new `conversation_id` and the agent's opening greeting.",
+        "description": "Starts a new conversation between an agent and a patient using a given script, and generates the agent's opening greeting before responding. Expect a few seconds of latency — the reply is not returned until the conversation is fully ready to accept messages.\n\nThe patient must already exist for your partner (created through the patient ingestion API) before a conversation can be started for them; an unknown `patient_id` returns `404 patient_not_found`.\n\nRequires scope `write:chat_messages`.",
         "tags": ["conversations"],
         "requestBody": {
           "required": true,
@@ -39,15 +47,26 @@
         },
         "responses": {
           "201": {
-            "description": "Conversation created.",
+            "description": "Conversation created and ready for messages.",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/CreateConversationResponse" }
               }
             }
           },
+          "400": {
+            "description": "`unsupported_script_configuration` — the referenced script uses a configuration this API cannot run as a text conversation.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConversationError" }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired or invalid bearer token. No response body."
+          },
           "403": {
-            "description": "Not permitted to create a conversation for this agent/script/patient.",
+            "description": "Token lacks the `write:chat_messages` scope (no response body), or `missing_partner` — the token carries no partner identity.",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/ConversationError" }
@@ -55,7 +74,7 @@
             }
           },
           "404": {
-            "description": "Referenced agent, script, or patient was not found.",
+            "description": "`patient_not_found` — no patient with this `patient_id` exists for the authenticated partner.",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/ConversationError" }
@@ -63,7 +82,7 @@
             }
           },
           "409": {
-            "description": "Conflicts with existing state (e.g. an active conversation already exists).",
+            "description": "Reserved for conflicts with existing state. Not emitted by the current implementation.",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/ConversationError" }
@@ -71,7 +90,7 @@
             }
           },
           "422": {
-            "description": "Request body failed validation.",
+            "description": "Request body failed validation (missing or wrongly typed field).",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/ValidationError" }
@@ -79,141 +98,7 @@
             }
           },
           "500": {
-            "description": "Internal server error.",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/ConversationError" }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/conversations/{conversation_id}": {
-      "get": {
-        "summary": "Get a conversation",
-        "operationId": "get_conversation",
-        "description": "Returns the current state of a conversation along with its message history.",
-        "tags": ["conversations"],
-        "parameters": [
-          {
-            "name": "conversation_id",
-            "in": "path",
-            "required": true,
-            "description": "Identifier returned by `create_conversation`.",
-            "schema": { "type": "string" }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Conversation state and message history.",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/GetConversationResponse" }
-              }
-            }
-          },
-          "401": {
-            "description": "Missing or invalid bearer token.",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/ConversationError" }
-              }
-            }
-          },
-          "403": {
-            "description": "Not permitted to access this conversation.",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/ConversationError" }
-              }
-            }
-          },
-          "404": {
-            "description": "Conversation not found.",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/ConversationError" }
-              }
-            }
-          },
-          "422": {
-            "description": "Invalid `conversation_id`.",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/ConversationError" }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/conversations/{conversation_id}/end": {
-      "post": {
-        "summary": "End a conversation",
-        "operationId": "end_conversation",
-        "description": "Ends an active conversation and returns the final triage `disposition` (tier, recommended action, and surfaced/accepted/declined care gaps).",
-        "tags": ["conversations"],
-        "parameters": [
-          {
-            "name": "conversation_id",
-            "in": "path",
-            "required": true,
-            "description": "Identifier of the conversation to end.",
-            "schema": { "type": "string" }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": { "$ref": "#/components/schemas/EndConversationRequest" }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Conversation ended; final disposition returned.",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/EndConversationResponse" }
-              }
-            }
-          },
-          "403": {
-            "description": "Not permitted to end this conversation.",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/ConversationError" }
-              }
-            }
-          },
-          "404": {
-            "description": "Conversation not found.",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/ConversationError" }
-              }
-            }
-          },
-          "409": {
-            "description": "Conversation is not in a state that can be ended (e.g. already ended).",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/ConversationError" }
-              }
-            }
-          },
-          "422": {
-            "description": "Invalid request.",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/ConversationError" }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal server error.",
+            "description": "`prerequisite_data_unavailable` (patient, script or agent data could not be loaded), `preparation_failed`, or `llm_conversation_creation_failed`. Nothing was created; the request may be retried.",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/ConversationError" }
@@ -227,15 +112,15 @@
       "post": {
         "summary": "Send a message",
         "operationId": "send_message",
-        "description": "Sends a patient message into the conversation and returns the agent's reply. Any structured events generated while processing the message are included in `events`.",
+        "description": "Sends the patient's next message and returns the agent's reply for that turn, along with any `events` emitted while processing it. Send only the new utterance — the server holds the full history.\n\nOne turn at a time: a send that arrives while another is still processing is rejected with `409 message_processing_busy`. Once the conversation has ended (by `POST .../end`, or because an `end_call` event was emitted), further sends are rejected with `409 conversation_not_active`.\n\nSupply an `idempotency_key` so a retry after a lost response is answered with the original reply instead of running a new turn.\n\nRequires scope `write:chat_messages`.",
         "tags": ["conversations"],
         "parameters": [
           {
             "name": "conversation_id",
             "in": "path",
             "required": true,
-            "description": "Identifier of the conversation to post the message to.",
-            "schema": { "type": "string" }
+            "description": "Identifier returned by `create_conversation`. Must be a UUID.",
+            "schema": { "type": "string", "format": "uuid" }
           }
         ],
         "requestBody": {
@@ -248,23 +133,31 @@
         },
         "responses": {
           "200": {
-            "description": "The agent's reply.",
+            "description": "The agent's reply for this turn.",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/SendMessageResponse" }
               }
             }
           },
-          "401": {
-            "description": "Missing or invalid bearer token.",
+          "400": {
+            "description": "`message_invalid` — `text` is empty or otherwise unacceptable. Also returned (as `{ \"error\": \"...\" }`) when `conversation_id` is not a valid UUID.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/ConversationError" }
+                "schema": {
+                  "oneOf": [
+                    { "$ref": "#/components/schemas/ConversationError" },
+                    { "$ref": "#/components/schemas/InvalidIdentifierError" }
+                  ]
+                }
               }
             }
           },
+          "401": {
+            "description": "Missing, expired or invalid bearer token. No response body."
+          },
           "403": {
-            "description": "Not permitted to post to this conversation.",
+            "description": "Token lacks the `write:chat_messages` scope (no response body), or `missing_partner`.",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/ConversationError" }
@@ -272,7 +165,7 @@
             }
           },
           "404": {
-            "description": "Conversation not found.",
+            "description": "`conversation_not_found` — no such conversation for the authenticated partner. `conversation_runtime_unavailable` — the conversation exists but cannot be resumed.",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/ConversationError" }
@@ -280,7 +173,7 @@
             }
           },
           "409": {
-            "description": "Conversation is not accepting messages (e.g. already ended).",
+            "description": "`conversation_not_active` — the conversation has ended. `message_processing_busy` — another turn is in flight; retry shortly. `duplicate_message` — this `idempotency_key` was already used and the original turn did not complete successfully. `idempotency_key_reused` — this `idempotency_key` was already used with different `text`.",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/ConversationError" }
@@ -288,7 +181,72 @@
             }
           },
           "422": {
-            "description": "Invalid request (e.g. empty `text`, or conversation already ended).",
+            "description": "Request body failed validation (missing `text`, or `text` is blank).",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ValidationError" }
+              }
+            }
+          },
+          "500": {
+            "description": "`message_processing_failed` or `preparation_failed` — the turn could not be completed. The message may or may not have been recorded; check `GET /v1/conversations/{conversation_id}` before resending.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConversationError" }
+              }
+            }
+          },
+          "503": {
+            "description": "`conversation_runtime_unavailable` or `server_shutting_down` — the conversation cannot be served right now. Transient; back off and retry.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConversationError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/conversations/{conversation_id}": {
+      "get": {
+        "summary": "Get a conversation",
+        "operationId": "get_conversation",
+        "description": "Returns the conversation's current status and its full message history, with each turn's `events` replayed in the same shape as the send-message response. Served from durable storage, so it works at any point in the conversation's life, including after it has ended.\n\nUse this to recover from a lost `send_message` response, to rebuild UI state, or to read the `call_disposition` of an ended conversation.\n\nRequires scope `read:chat_messages`.",
+        "tags": ["conversations"],
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "description": "Identifier returned by `create_conversation`. Must be a UUID.",
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Conversation status and message history.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GetConversationResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "`conversation_id` is not a valid UUID.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/InvalidIdentifierError" }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired or invalid bearer token. No response body."
+          },
+          "403": {
+            "description": "Token lacks the `read:chat_messages` scope. No response body."
+          },
+          "404": {
+            "description": "`conversation_not_found` — no such conversation for the authenticated partner.",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/ConversationError" }
@@ -296,7 +254,101 @@
             }
           },
           "500": {
-            "description": "Internal server error.",
+            "description": "`history_replay_failed` — stored events for this conversation could not be rendered.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConversationError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/conversations/{conversation_id}/end": {
+      "post": {
+        "summary": "End a conversation",
+        "operationId": "end_conversation",
+        "description": "Ends an active conversation and returns its `call_disposition`. After this call, further `send_message` requests are rejected with `409 conversation_not_active`.\n\nEnding an already-ended conversation is idempotent and returns `200` with the same disposition.\n\nRequires scope `write:chat_messages`.",
+        "tags": ["conversations"],
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "description": "Identifier of the conversation to end. Must be a UUID.",
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/EndConversationRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Conversation ended.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/EndConversationResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "`conversation_id` is not a valid UUID.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/InvalidIdentifierError" }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired or invalid bearer token. No response body."
+          },
+          "403": {
+            "description": "Token lacks the `write:chat_messages` scope (no response body), or `missing_partner`.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConversationError" }
+              }
+            }
+          },
+          "404": {
+            "description": "`conversation_not_found` — no such conversation for the authenticated partner.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConversationError" }
+              }
+            }
+          },
+          "409": {
+            "description": "`message_processing_busy` — a turn is still in flight; retry shortly and the end will be applied.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConversationError" }
+              }
+            }
+          },
+          "422": {
+            "description": "Request body failed validation (missing `reason`).",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ValidationError" }
+              }
+            }
+          },
+          "500": {
+            "description": "`conversation_end_failed` — the conversation could not be ended. Retry, then check `GET /v1/conversations/{conversation_id}` for its status.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConversationError" }
+              }
+            }
+          },
+          "503": {
+            "description": "`conversation_runtime_unavailable` or `server_shutting_down` — transient; back off and retry.",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/ConversationError" }
@@ -310,15 +362,15 @@
       "get": {
         "summary": "Get the transcript",
         "operationId": "get_transcript",
-        "description": "Returns the full turn-by-turn transcript of the conversation.",
+        "description": "Returns the turn-by-turn transcript of an **ended** conversation. Transcript messages do not carry `events`; use `GET /v1/conversations/{conversation_id}` when you need those.\n\nRequires scope `read:chat_messages`.",
         "tags": ["conversations"],
         "parameters": [
           {
             "name": "conversation_id",
             "in": "path",
             "required": true,
-            "description": "Identifier of the conversation whose transcript to fetch.",
-            "schema": { "type": "string" }
+            "description": "Identifier of the conversation whose transcript to fetch. Must be a UUID.",
+            "schema": { "type": "string", "format": "uuid" }
           }
         ],
         "responses": {
@@ -330,24 +382,22 @@
               }
             }
           },
-          "401": {
-            "description": "Missing or invalid bearer token.",
+          "400": {
+            "description": "`conversation_id` is not a valid UUID.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/ConversationError" }
+                "schema": { "$ref": "#/components/schemas/InvalidIdentifierError" }
               }
             }
+          },
+          "401": {
+            "description": "Missing, expired or invalid bearer token. No response body."
           },
           "403": {
-            "description": "Not permitted to access this transcript.",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/ConversationError" }
-              }
-            }
+            "description": "Token lacks the `read:chat_messages` scope. No response body."
           },
           "404": {
-            "description": "Conversation not found.",
+            "description": "`conversation_not_found` — no such conversation for the authenticated partner.",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/ConversationError" }
@@ -355,15 +405,7 @@
             }
           },
           "409": {
-            "description": "Transcript not available in the conversation's current state.",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/ConversationError" }
-              }
-            }
-          },
-          "422": {
-            "description": "Invalid `conversation_id`.",
+            "description": "`conversation_not_ended` — the conversation is still active. End it first, or use `GET /v1/conversations/{conversation_id}` for live history.",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/ConversationError" }
@@ -379,7 +421,8 @@
       "bearerAuth": {
         "type": "http",
         "scheme": "bearer",
-        "description": "Bearer token sent as `Authorization: Bearer <token>`."
+        "bearerFormat": "JWT",
+        "description": "OAuth 2.0 client-credentials access token, sent as `Authorization: Bearer <token>`. Obtain it from the token endpoint provided at onboarding using your `client_id` / `client_secret`; tokens are short-lived, so refresh on `401`. Scopes: `read:chat_messages` for GET endpoints, `write:chat_messages` for POST endpoints."
       }
     },
     "schemas": {
@@ -391,23 +434,23 @@
           "agent_id": {
             "type": "string",
             "title": "Agent Id",
-            "description": "Identifier of the agent that will run the conversation."
+            "description": "Identifier of the agent that will run the conversation. Provided at onboarding."
           },
           "script_id": {
             "type": "string",
             "title": "Script Id",
-            "description": "Identifier of the script the agent should follow."
+            "description": "Identifier of the script the agent should follow. Provided at onboarding."
           },
           "patient_id": {
             "type": "string",
             "title": "Patient Id",
-            "description": "Identifier of the patient this conversation is with."
+            "description": "Your external identifier for the patient — the same value supplied when the patient was ingested. The patient must already exist for your partner."
           }
         },
         "example": {
-          "agent_id": "agt_8f2c1a",
-          "script_id": "scr_triage_v3",
-          "patient_id": "pat_4d9b77"
+          "agent_id": "3f0c2a4e-8b1d-4f6a-9c2e-5d7b1a2c3e4f",
+          "script_id": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+          "patient_id": "MRN-00012345"
         }
       },
       "CreateConversationResponse": {
@@ -417,6 +460,7 @@
         "properties": {
           "conversation_id": {
             "type": "string",
+            "format": "uuid",
             "title": "Conversation Id",
             "description": "Identifier for the newly created conversation. Use it in all subsequent calls."
           },
@@ -424,15 +468,15 @@
             "type": "string",
             "format": "date-time",
             "title": "Created At",
-            "description": "When the conversation was created (ISO 8601)."
+            "description": "When the conversation was created (ISO 8601, UTC)."
           },
           "greeting": { "$ref": "#/components/schemas/Greeting" }
         },
         "example": {
-          "conversation_id": "conv_01HX9ZQK7N",
-          "created_at": "2026-06-22T15:04:05Z",
+          "conversation_id": "5c1a0b2d-3e4f-4a5b-8c6d-7e8f9a0b1c2d",
+          "created_at": "2026-09-14T15:04:05Z",
           "greeting": {
-            "text": "Hi, this is your care assistant calling to check in. How have you been feeling?"
+            "text": "Hi, I'm your care assistant. How have you been feeling since your last visit?"
           }
         }
       },
@@ -444,9 +488,91 @@
           "text": {
             "type": "string",
             "title": "Text",
-            "description": "The agent's opening message to the patient."
+            "description": "The agent's opening message to the patient. Display it as the first assistant message."
           }
         }
+      },
+      "SendMessageRequest": {
+        "type": "object",
+        "title": "SendMessageRequest",
+        "required": ["text"],
+        "properties": {
+          "text": {
+            "type": "string",
+            "title": "Text",
+            "description": "The patient's new message. Must not be blank. Send only the new utterance — the server holds the full history."
+          },
+          "idempotency_key": {
+            "type": ["string", "null"],
+            "title": "Idempotency Key",
+            "description": "Opt-in retry key — mint a new value for each message; values must be unique within the conversation. A retry carrying the same key never re-runs the turn: if the original completed successfully, its response is returned again unchanged, otherwise the retry is rejected with `duplicate_message` (409). Reusing a key for different `text` is a client error and is rejected with `idempotency_key_reused` (409) rather than replayed, so a new message is never silently answered with an earlier reply. Once the conversation has ended, retries are rejected with `conversation_not_active` (409) like any other message; use `GET /v1/conversations/{conversation_id}` to recover a lost final response. Blank values are treated as absent."
+          }
+        },
+        "example": {
+          "text": "I've had a headache since this morning.",
+          "idempotency_key": "8f14e45f-ce7e-4b0a-9c2a-1d2e3f4a5b6c"
+        }
+      },
+      "SendMessageResponse": {
+        "type": "object",
+        "title": "SendMessageResponse",
+        "description": "The agent's reply for one turn, plus the events that turn produced.",
+        "required": ["message_id", "text"],
+        "properties": {
+          "message_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Message Id",
+            "description": "Identifier of the agent's reply message. Matches `message_id` in `GET /v1/conversations/{conversation_id}` history."
+          },
+          "text": {
+            "type": "string",
+            "title": "Text",
+            "description": "The agent's reply text."
+          },
+          "events": {
+            "type": "array",
+            "title": "Events",
+            "default": [],
+            "description": "Client-visible events emitted for this turn, in emission order. Empty for most turns. Multiple distinct events are allowed, but `transfer_to_human` never repeats.",
+            "items": { "$ref": "#/components/schemas/Event" }
+          }
+        },
+        "examples": [
+          {
+            "message_id": "b7e2c1d0-4f3a-4b5c-9d6e-7f8a9b0c1d2e",
+            "text": "I'm sorry you're dealing with that. How would you rate the pain from 1 to 10?",
+            "events": []
+          },
+          {
+            "message_id": "c8f3d2e1-5a4b-4c6d-8e7f-9a0b1c2d3e4f",
+            "text": "Would it be okay if I ask a few questions to better understand what you shared?",
+            "events": [
+              { "type": "escalation", "escalation_id": "high_temp", "status": "detected" }
+            ]
+          },
+          {
+            "message_id": "d9a4e3f2-6b5c-4d7e-9f8a-0b1c2d3e4f5a",
+            "text": "Thank you for answering those questions. I've completed the evaluation.",
+            "events": [
+              { "type": "escalation", "escalation_id": "high_temp", "status": "completed", "tier": "TIER_2" }
+            ]
+          },
+          {
+            "message_id": "e0b5f4a3-7c6d-4e8f-8a9b-1c2d3e4f5a6b",
+            "text": "I'll help connect you with a human representative now.",
+            "events": [
+              { "type": "transfer_to_human", "escalation_id": "high_temp", "context_summary": "Patient reports a persistent fever and requires a human handoff." }
+            ]
+          },
+          {
+            "message_id": "f1c6a5b4-8d7e-4f9a-9b0c-2d3e4f5a6b7c",
+            "text": "Thank you for chatting with me. This conversation is now complete.",
+            "events": [
+              { "type": "end_call", "reason": "completed" }
+            ]
+          }
+        ]
       },
       "GetConversationResponse": {
         "type": "object",
@@ -455,19 +581,26 @@
         "properties": {
           "conversation_id": {
             "type": "string",
+            "format": "uuid",
             "title": "Conversation Id",
             "description": "Identifier of the conversation."
           },
           "status": {
             "type": "string",
+            "enum": ["active", "ended"],
             "title": "Status",
-            "description": "Current lifecycle status of the conversation, e.g. `active` or `ended`. _(inferred)_"
+            "description": "`active` while the conversation can accept messages; `ended` once it has been ended by the client, by the agent (`end_call` event), or by expiry."
+          },
+          "call_disposition": {
+            "type": "string",
+            "title": "Call Disposition",
+            "description": "Present only for ended conversations, and may lag briefly after ending while the disposition is persisted. Same values as `EndConversationResponse.call_disposition`."
           },
           "created_at": {
             "type": "string",
             "format": "date-time",
             "title": "Created At",
-            "description": "When the conversation was created (ISO 8601)."
+            "description": "When the conversation was created (ISO 8601, UTC)."
           },
           "agent_id": {
             "type": "string",
@@ -480,37 +613,47 @@
             "description": "Script the agent is following."
           },
           "patient_id": {
-            "type": "string",
-            "nullable": true,
+            "type": ["string", "null"],
             "title": "Patient Id",
-            "description": "Patient on the conversation. May be null."
+            "description": "Your external identifier for the patient, as supplied when the patient was ingested."
           },
           "messages": {
             "type": "array",
             "title": "Messages",
-            "description": "Messages exchanged so far, in chronological order.",
-            "items": { "$ref": "#/components/schemas/Message" }
+            "description": "Messages exchanged so far, in chronological order, each with the events replayed for its turn.",
+            "items": { "$ref": "#/components/schemas/HistoryMessage" }
           }
         },
         "example": {
-          "conversation_id": "conv_01HX9ZQK7N",
+          "conversation_id": "5c1a0b2d-3e4f-4a5b-8c6d-7e8f9a0b1c2d",
           "status": "active",
-          "created_at": "2026-06-22T15:04:05Z",
-          "agent_id": "agt_8f2c1a",
-          "script_id": "scr_triage_v3",
-          "patient_id": "pat_4d9b77",
+          "created_at": "2026-09-14T15:04:05Z",
+          "agent_id": "3f0c2a4e-8b1d-4f6a-9c2e-5d7b1a2c3e4f",
+          "script_id": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+          "patient_id": "MRN-00012345",
           "messages": [
             {
-              "message_id": "msg_a1",
+              "message_id": "a6d1b0c9-3e2f-4a4b-8c5d-6e7f8a9b0c1d",
               "role": "assistant",
-              "text": "Hi, this is your care assistant calling to check in. How have you been feeling?",
-              "created_at": "2026-06-22T15:04:05Z"
+              "text": "Hi, I'm your care assistant. How have you been feeling since your last visit?",
+              "created_at": "2026-09-14T15:04:05Z",
+              "events": []
             },
             {
-              "message_id": "msg_a2",
+              "message_id": "a7e2c1d0-4f3a-4b5c-9d6e-7f8a9b0c1d2e",
               "role": "user",
               "text": "I've had a headache since this morning.",
-              "created_at": "2026-06-22T15:04:32Z"
+              "created_at": "2026-09-14T15:04:32Z",
+              "events": []
+            },
+            {
+              "message_id": "b7e2c1d0-4f3a-4b5c-9d6e-7f8a9b0c1d2e",
+              "role": "assistant",
+              "text": "I'm sorry you're dealing with that. How would you rate the pain from 1 to 10?",
+              "created_at": "2026-09-14T15:04:34Z",
+              "events": [
+                { "type": "escalation", "escalation_id": "headache", "status": "detected" }
+              ]
             }
           ]
         }
@@ -518,18 +661,20 @@
       "Message": {
         "type": "object",
         "title": "Message",
-        "description": "A single message in a conversation's history.",
+        "description": "A single message in a conversation.",
         "required": ["message_id", "role", "text", "created_at"],
         "properties": {
           "message_id": {
             "type": "string",
+            "format": "uuid",
             "title": "Message Id",
             "description": "Identifier of the message."
           },
           "role": {
             "type": "string",
+            "enum": ["user", "assistant"],
             "title": "Role",
-            "description": "Who sent the message, e.g. `assistant` or `user`. _(inferred)_"
+            "description": "`user` for the patient's messages, `assistant` for the agent's."
           },
           "text": {
             "type": "string",
@@ -540,9 +685,28 @@
             "type": "string",
             "format": "date-time",
             "title": "Created At",
-            "description": "When the message was created (ISO 8601)."
+            "description": "When the message was created (ISO 8601, UTC)."
           }
         }
+      },
+      "HistoryMessage": {
+        "title": "HistoryMessage",
+        "description": "A history message plus the replayed events for the turn it completed. Events use the same wire shape as `SendMessageResponse.events` and attach to the turn's final assistant message (falling back to the user message when the turn produced no assistant reply). A turn that emitted nothing has `events: []`.",
+        "allOf": [
+          { "$ref": "#/components/schemas/Message" },
+          {
+            "type": "object",
+            "properties": {
+              "events": {
+                "type": "array",
+                "title": "Events",
+                "default": [],
+                "description": "Replayed client-visible events for this message's turn, in emission order.",
+                "items": { "$ref": "#/components/schemas/Event" }
+              }
+            }
+          }
+        ]
       },
       "EndConversationRequest": {
         "type": "object",
@@ -552,11 +716,11 @@
           "reason": {
             "type": "string",
             "title": "Reason",
-            "description": "Why the conversation is being ended (free text)."
+            "description": "Why the conversation is being ended. Two values are recognised and recorded distinctly: `expired` (the client's own inactivity timeout fired) and `logged_out` (the patient signed out). Any other string is recorded as a regular user-initiated end."
           }
         },
         "example": {
-          "reason": "Patient requested to end the call."
+          "reason": "logged_out"
         }
       },
       "EndConversationResponse": {
@@ -566,40 +730,29 @@
         "properties": {
           "conversation_id": {
             "type": "string",
+            "format": "uuid",
             "title": "Conversation Id",
             "description": "Identifier of the ended conversation."
           },
           "call_disposition": {
             "type": "string",
             "title": "Call Disposition",
-            "description": "Outcome of the call/conversation overall, e.g. `completed`, `no_answer`, or `voicemail`. _(values inferred)_"
+            "description": "How the conversation concluded. Values: `call_completed`, `call_hung_up`, `no_answer`, `failed_verification`, `call_failed`, `immediate_hang_up`. Treat unknown values as opaque — the set may grow."
           },
           "disposition": {
             "$ref": "#/components/schemas/Disposition",
-            "nullable": true,
-            "description": "Triage outcome of the conversation. Null when no triage disposition was produced (e.g. the call did not complete)."
+            "description": "Reserved for a structured triage summary. **Not populated by the current implementation** — the field is omitted from responses today. Clients must not depend on it."
           }
         },
         "example": {
-          "conversation_id": "conv_01HX9ZQK7N",
-          "call_disposition": "completed",
-          "disposition": {
-            "triage_tier": 3,
-            "triage_tier_label": "Urgent",
-            "triage_action": "See a provider within 24 hours",
-            "summary": "Patient reports a headache persisting since the morning with no red-flag symptoms.",
-            "care_gaps_surfaced": ["flu_vaccine", "a1c_screening"],
-            "care_gaps_accepted": ["flu_vaccine"],
-            "care_gaps_declined": ["a1c_screening"],
-            "follow_up_recommended": true,
-            "follow_up_cadence": "1_week"
-          }
+          "conversation_id": "5c1a0b2d-3e4f-4a5b-8c6d-7e8f9a0b1c2d",
+          "call_disposition": "call_completed"
         }
       },
       "Disposition": {
         "type": "object",
         "title": "Disposition",
-        "description": "Final triage outcome of the conversation.",
+        "description": "Structured triage outcome of a conversation. Declared in the contract for forward compatibility; not populated by the current implementation.",
         "required": [
           "triage_tier",
           "triage_tier_label",
@@ -612,105 +765,15 @@
           "follow_up_cadence"
         ],
         "properties": {
-          "triage_tier": {
-            "type": "integer",
-            "title": "Triage Tier",
-            "description": "Numeric triage severity tier (higher = more acute). _(inferred range)_"
-          },
-          "triage_tier_label": {
-            "type": "string",
-            "title": "Triage Tier Label",
-            "description": "Human-readable label for the triage tier, e.g. `Urgent`. _(inferred)_"
-          },
-          "triage_action": {
-            "type": "string",
-            "title": "Triage Action",
-            "description": "Recommended next action for the patient."
-          },
-          "summary": {
-            "type": "string",
-            "title": "Summary",
-            "description": "Short summary of the conversation and reasoning."
-          },
-          "care_gaps_surfaced": {
-            "type": "array",
-            "title": "Care Gaps Surfaced",
-            "description": "Care gaps the agent raised during the conversation. _(values inferred)_",
-            "items": { "type": "string" }
-          },
-          "care_gaps_accepted": {
-            "type": "array",
-            "title": "Care Gaps Accepted",
-            "description": "Surfaced care gaps the patient agreed to address.",
-            "items": { "type": "string" }
-          },
-          "care_gaps_declined": {
-            "type": "array",
-            "title": "Care Gaps Declined",
-            "description": "Surfaced care gaps the patient declined.",
-            "items": { "type": "string" }
-          },
-          "follow_up_recommended": {
-            "type": "boolean",
-            "title": "Follow Up Recommended",
-            "description": "Whether a follow-up is recommended."
-          },
-          "follow_up_cadence": {
-            "type": "string",
-            "title": "Follow Up Cadence",
-            "description": "Recommended follow-up cadence, e.g. `1_week`. _(inferred)_"
-          }
-        }
-      },
-      "SendMessageRequest": {
-        "type": "object",
-        "title": "SendMessageRequest",
-        "required": ["text"],
-        "properties": {
-          "text": {
-            "type": "string",
-            "title": "Text",
-            "description": "The patient's message to send into the conversation."
-          },
-          "idempotency_key": {
-            "type": "string",
-            "nullable": true,
-            "title": "Idempotency Key",
-            "description": "Optional client-supplied key to safely retry the same send without creating a duplicate message. _(inferred behavior)_"
-          }
-        },
-        "example": {
-          "text": "I've had a headache since this morning.",
-          "idempotency_key": "8f14e45f-ce7e-4b0a-9c2a-1d2e3f4a5b6c"
-        }
-      },
-      "SendMessageResponse": {
-        "type": "object",
-        "title": "SendMessageResponse",
-        "required": ["message_id", "text"],
-        "properties": {
-          "message_id": {
-            "type": "string",
-            "title": "Message Id",
-            "description": "Identifier of the agent's reply message."
-          },
-          "text": {
-            "type": "string",
-            "title": "Text",
-            "description": "The agent's reply text."
-          },
-          "events": {
-            "type": "array",
-            "title": "Events",
-            "default": [],
-            "description": "Structured events emitted while processing the message (the exact event shape is event-specific and not constrained here).",
-            "items": { "type": "object" }
-          }
-        },
-        "example": {
-          "message_id": "msg_a3",
-          "text": "I'm sorry you're dealing with that. How would you rate the pain from 1 to 10?",
-          "events": []
+          "triage_tier": { "type": "integer", "title": "Triage Tier" },
+          "triage_tier_label": { "type": "string", "title": "Triage Tier Label" },
+          "triage_action": { "type": "string", "title": "Triage Action" },
+          "summary": { "type": "string", "title": "Summary" },
+          "care_gaps_surfaced": { "type": "array", "title": "Care Gaps Surfaced", "items": { "type": "string" } },
+          "care_gaps_accepted": { "type": "array", "title": "Care Gaps Accepted", "items": { "type": "string" } },
+          "care_gaps_declined": { "type": "array", "title": "Care Gaps Declined", "items": { "type": "string" } },
+          "follow_up_recommended": { "type": "boolean", "title": "Follow Up Recommended" },
+          "follow_up_cadence": { "type": "string", "title": "Follow Up Cadence" }
         }
       },
       "TranscriptResponse": {
@@ -720,104 +783,230 @@
         "properties": {
           "conversation_id": {
             "type": "string",
+            "format": "uuid",
             "title": "Conversation Id",
             "description": "Identifier of the conversation."
           },
           "status": {
             "type": "string",
+            "enum": ["active", "ended"],
             "title": "Status",
-            "description": "Lifecycle status of the conversation. _(inferred)_"
+            "description": "Lifecycle status of the conversation. Always `ended` on a successful transcript response."
           },
           "started_at": {
             "type": "string",
             "format": "date-time",
             "title": "Started At",
-            "description": "When the conversation started (ISO 8601)."
+            "description": "When the conversation started (ISO 8601, UTC)."
           },
           "ended_at": {
-            "type": "string",
+            "type": ["string", "null"],
             "format": "date-time",
-            "nullable": true,
             "title": "Ended At",
-            "description": "When the conversation ended (ISO 8601), or null if still active."
+            "description": "When the conversation ended (ISO 8601, UTC)."
           },
           "messages": {
             "type": "array",
             "title": "Messages",
-            "description": "Turn-by-turn messages in chronological order.",
+            "description": "Turn-by-turn messages in chronological order. Transcript messages carry no `events`.",
             "items": { "$ref": "#/components/schemas/Message" }
           }
         },
         "example": {
-          "conversation_id": "conv_01HX9ZQK7N",
+          "conversation_id": "5c1a0b2d-3e4f-4a5b-8c6d-7e8f9a0b1c2d",
           "status": "ended",
-          "started_at": "2026-06-22T15:04:05Z",
-          "ended_at": "2026-06-22T15:09:48Z",
+          "started_at": "2026-09-14T15:04:05Z",
+          "ended_at": "2026-09-14T15:09:48Z",
           "messages": [
             {
-              "message_id": "msg_a1",
+              "message_id": "a6d1b0c9-3e2f-4a4b-8c5d-6e7f8a9b0c1d",
               "role": "assistant",
-              "text": "Hi, this is your care assistant calling to check in. How have you been feeling?",
-              "created_at": "2026-06-22T15:04:05Z"
+              "text": "Hi, I'm your care assistant. How have you been feeling since your last visit?",
+              "created_at": "2026-09-14T15:04:05Z"
             },
             {
-              "message_id": "msg_a2",
+              "message_id": "a7e2c1d0-4f3a-4b5c-9d6e-7f8a9b0c1d2e",
               "role": "user",
               "text": "I've had a headache since this morning.",
-              "created_at": "2026-06-22T15:04:32Z"
+              "created_at": "2026-09-14T15:04:32Z"
             }
           ]
         }
       },
+      "Event": {
+        "title": "Event",
+        "description": "A client-visible event raised during a turn. Discriminate on `type`; `escalation` events additionally carry a `status`.\n\n**Handling rules**\n\n- **Escalations are not a fixed three-step sequence.** Each `status` is emitted at most once per evaluation and only when the evaluation reaches it. `in_progress` means the evaluation needs another turn, so an evaluation that resolves in a single turn reports `completed` alone, and one that never asks a follow-up skips `in_progress` entirely.\n- **Not every escalation gets a `completed`.** An evaluation that is displaced by a higher-priority concern reports nothing further. Do not block UI state on a terminal event for every `escalation_id` you have seen.\n- **`escalation_id` repeats.** It identifies the concern, not the occurrence. If the same concern is evaluated again later, the id is reused and a new lifecycle runs. Treat the latest event for an id as its current state — an earlier `TIER_0` is not a permanent all-clear.\n- **`end_call` closes the conversation server-side.** After it, sends return `409 conversation_not_active`. Nothing else closes the conversation implicitly: a `transfer_to_human` does not end the session and is not followed by an `end_call`.",
+        "oneOf": [
+          { "$ref": "#/components/schemas/EscalationDetectedEvent" },
+          { "$ref": "#/components/schemas/EscalationInProgressEvent" },
+          { "$ref": "#/components/schemas/EscalationCompletedEvent" },
+          { "$ref": "#/components/schemas/TransferToHumanEvent" },
+          { "$ref": "#/components/schemas/EndCallEvent" }
+        ]
+      },
+      "EscalationDetectedEvent": {
+        "type": "object",
+        "title": "EscalationDetectedEvent",
+        "description": "Emitted when a possible escalation is detected, unless its evaluation resolves in the same turn.",
+        "additionalProperties": false,
+        "required": ["type", "escalation_id", "status"],
+        "properties": {
+          "type": { "type": "string", "const": "escalation", "title": "Type" },
+          "escalation_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Escalation Id",
+            "description": "Opaque identifier for the concern that escalated. Match it exactly; do not parse it or require UUID formatting. It repeats if the same concern is evaluated again later in the conversation, so treat the latest event for an `escalation_id` as its current state."
+          },
+          "status": { "type": "string", "const": "detected", "title": "Status" }
+        },
+        "example": { "type": "escalation", "escalation_id": "high_temp", "status": "detected" }
+      },
+      "EscalationInProgressEvent": {
+        "type": "object",
+        "title": "EscalationInProgressEvent",
+        "description": "Emitted when the escalation evaluation needs another turn to resolve.",
+        "additionalProperties": false,
+        "required": ["type", "escalation_id", "status"],
+        "properties": {
+          "type": { "type": "string", "const": "escalation", "title": "Type" },
+          "escalation_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Escalation Id",
+            "description": "Opaque identifier for the concern that escalated. See `EscalationDetectedEvent`."
+          },
+          "status": { "type": "string", "const": "in_progress", "title": "Status" }
+        },
+        "example": { "type": "escalation", "escalation_id": "high_temp", "status": "in_progress" }
+      },
+      "EscalationCompletedEvent": {
+        "type": "object",
+        "title": "EscalationCompletedEvent",
+        "description": "Emitted when the evaluation produces an outcome.\n\nNot every escalation reaches it. One the system never adjudicates — because a higher-priority concern resolved first — stops at whatever status it last reported, so a missing `completed` is not an evaluation still running.",
+        "additionalProperties": false,
+        "required": ["type", "escalation_id", "status", "tier"],
+        "properties": {
+          "type": { "type": "string", "const": "escalation", "title": "Type" },
+          "escalation_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Escalation Id",
+            "description": "Opaque identifier for the concern that escalated. See `EscalationDetectedEvent`."
+          },
+          "status": { "type": "string", "const": "completed", "title": "Status" },
+          "tier": {
+            "$ref": "#/components/schemas/EscalationTier",
+            "description": "Outcome tier. `TIER_0` means the evaluation completed without a clinical escalation; `TIER_1` (least serious) through `TIER_4` (most serious) grade one that did. Match the token exactly — the set is a closed vocabulary, not a scale to parse or sort."
+          }
+        },
+        "example": { "type": "escalation", "escalation_id": "high_temp", "status": "completed", "tier": "TIER_2" }
+      },
+      "EscalationTier": {
+        "type": "string",
+        "title": "EscalationTier",
+        "description": "Terminal outcome of an escalation evaluation. Strings rather than integers because `TIER_0` is not a degree of severity — it reports that the evaluation finished without a clinical escalation — so the set is a closed vocabulary rather than an ordered scale to do arithmetic on.",
+        "enum": ["TIER_0", "TIER_1", "TIER_2", "TIER_3", "TIER_4"]
+      },
+      "TransferToHumanEvent": {
+        "type": "object",
+        "title": "TransferToHumanEvent",
+        "description": "Emitted at most once per conversation, when the agent hands the patient to a human. The conversation is not ended by this event; it remains open unless the client ends it or an `end_call` is emitted.",
+        "additionalProperties": false,
+        "required": ["type", "context_summary"],
+        "properties": {
+          "type": { "type": "string", "const": "transfer_to_human", "title": "Type" },
+          "escalation_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Escalation Id",
+            "description": "Present when a reported escalation caused the transfer; otherwise omitted."
+          },
+          "context_summary": {
+            "type": "string",
+            "title": "Context Summary",
+            "description": "Hand-off context for the receiving human. May be empty when no summary is available. When populated it may contain sensitive conversation data and is not a verified clinical fact."
+          }
+        },
+        "example": { "type": "transfer_to_human", "escalation_id": "high_temp", "context_summary": "Patient reports a persistent fever and requires a human handoff." }
+      },
+      "EndCallEvent": {
+        "type": "object",
+        "title": "EndCallEvent",
+        "description": "Emitted once when the server ends the conversation. After this event, further sends return `409 conversation_not_active`.",
+        "additionalProperties": false,
+        "required": ["type", "reason"],
+        "properties": {
+          "type": { "type": "string", "const": "end_call", "title": "Type" },
+          "reason": {
+            "$ref": "#/components/schemas/EndCallReason",
+            "description": "Why the conversation ended. The current implementation emits `completed` for a normal end and `error` for an end state it cannot map; `expired`, `client_ended` and `transferred_to_human` are declared for clients to handle but are not emitted today."
+          }
+        },
+        "example": { "type": "end_call", "reason": "completed" }
+      },
+      "EndCallReason": {
+        "type": "string",
+        "title": "EndCallReason",
+        "enum": ["completed", "expired", "client_ended", "transferred_to_human", "error"]
+      },
       "ConversationError": {
         "type": "object",
         "title": "ConversationError",
-        "required": ["error_code"],
+        "description": "Standard error body. `error_code` is stable and safe to branch on; `message` is for humans and may change. Codes in use: `missing_partner`, `patient_not_found`, `conversation_not_found`, `conversation_not_active`, `conversation_not_ended`, `conversation_runtime_unavailable`, `conversation_end_failed`, `prerequisite_data_unavailable`, `llm_conversation_creation_failed`, `preparation_failed`, `unsupported_script_configuration`, `server_shutting_down`, `message_processing_busy`, `message_processing_failed`, `message_invalid`, `duplicate_message`, `idempotency_key_reused`, `history_replay_failed`. Treat unknown codes as a generic failure for the returned HTTP status.",
+        "required": ["error_code", "message"],
         "properties": {
           "error_code": {
             "type": "string",
             "title": "Error Code",
-            "description": "Machine-readable error code, e.g. `conversation_not_found`. _(value inferred)_"
+            "description": "Machine-readable error code."
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "description": "Human-readable detail. Not stable; do not parse."
           }
         },
         "example": {
-          "error_code": "conversation_not_found"
+          "error_code": "conversation_not_active",
+          "message": "Conversation is not active."
         }
+      },
+      "InvalidIdentifierError": {
+        "type": "object",
+        "title": "InvalidIdentifierError",
+        "description": "Returned with `400` when a path `conversation_id` is not a valid UUID. Note the different shape from `ConversationError`.",
+        "required": ["error"],
+        "properties": {
+          "error": { "type": "string", "title": "Error" }
+        },
+        "example": { "error": "Invalid uuid not-a-uuid" }
       },
       "ValidationError": {
         "type": "array",
         "title": "ValidationError",
-        "description": "Model of a validation error response.",
+        "description": "Returned with `422` when a request body fails schema validation. A list of individual field errors.",
         "items": { "$ref": "#/components/schemas/ValidationErrorElement" }
       },
       "ValidationErrorElement": {
         "type": "object",
         "title": "ValidationErrorElement",
-        "description": "Model of a validation error response element.",
         "required": ["loc", "msg", "type"],
         "properties": {
           "loc": {
             "type": "array",
-            "title": "Missing field name",
+            "title": "Location",
+            "description": "Path to the offending field, e.g. `[\"text\"]`.",
             "items": { "type": "string" }
           },
-          "msg": {
-            "type": "string",
-            "title": "Error message"
-          },
-          "type": {
-            "type": "string",
-            "title": "Error type"
-          },
-          "ctx": {
-            "type": "object",
-            "title": "Error context"
-          }
+          "msg": { "type": "string", "title": "Error message" },
+          "type": { "type": "string", "title": "Error type" },
+          "ctx": { "type": "object", "title": "Error context" }
         },
         "example": {
-          "loc": ["body", "agent_id"],
-          "msg": "Field required",
-          "type": "missing"
+          "loc": ["text"],
+          "msg": "Value error, text must not be empty",
+          "type": "value_error"
         }
       }
     }

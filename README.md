@@ -2,18 +2,19 @@
 
 Interactive reference for the `v1/conversations/*` endpoints, rendered with [Scalar](https://github.com/scalar/scalar) and served from GitHub Pages.
 
-**Live:** https://hippocratic-ai-research.github.io/avery-api (once the repo is made public; currently private, served at https://friendly-adventure-9m971qg.pages.github.io/)
+**Live:** https://hippocratic-ai-research.github.io/avery-api/
 
 ## Files
 
-- `docs/index.html` — Scalar, loaded from CDN, pointed at `docs/openapi.json`.
-- `docs/openapi.json` — a self-contained, conversations-only OpenAPI 3.1 spec (the 5 endpoints + the schemas they use), with descriptions and examples added for these docs.
+- `docs/index.html` — Scalar, loaded from CDN, pointed at `docs/openapi.json`. The reference.
+- `docs/openapi.json` — a self-contained, conversations-only OpenAPI 3.1 spec: the 5 partner-facing endpoints, the schemas they use, and the event contract, with descriptions and examples written for these docs.
+- `docs/guide.md` — the Integration Guide (served at `/guide.html` via GitHub Pages' built-in Jekyll rendering): environments, authentication, end-to-end `curl` walkthrough, event-handling rules, error table, first-integration checklist. This is the single document to hand a new partner or UI team, together with their credentials.
 
-## Before sharing — confirm the inferred bits
+## Provenance
 
-The upstream spec had no field docs, so descriptions/examples were written by inference. Anything marked _(inferred)_ — `status`, `call_disposition`, `triage_tier`, `role`, `error_code`, `idempotency_key` behavior, care-gap and cadence values — is a guess; have a service owner confirm.
+Endpoint paths, methods, field names, types, required/nullable flags, enums and event shapes are taken from the service's generated OpenAPI source. Descriptions of runtime behaviour (which error codes each endpoint emits, status/role/disposition values, idempotency semantics, which events are emitted today) were verified against the implementation on the date noted at the bottom of the spec's `info.description`.
 
-`servers[0].url` is set to `https://api.safetyportal.hippocraticai.com` so the "Send Request" client hits the real API.
+Not included on purpose: non-production test endpoints, and partner-specific onboarding details (token endpoints, credentials). Those are provided directly to each integrating partner.
 
 ## Local preview
 
@@ -21,6 +22,6 @@ The upstream spec had no field docs, so descriptions/examples were written by in
 
 ## Updating the spec
 
-Hand-edit `docs/openapi.json`. It does not auto-sync from the upstream `Snow API` spec — if the conversations contract changes upstream, copy the changes over (the field descriptions/examples here are intentionally not in the source spec). The doc page re-renders automatically; no build step.
+`docs/openapi.json` is hand-maintained and does not auto-sync from the service. When the conversations contract changes upstream, regenerate the upstream spec, diff the `/v1/conversations*` paths and their schemas against this file, and carry the changes over — keeping the descriptions and examples here. Update the verification date in `info.description`. The page re-renders automatically on merge to `main`; there is no build step.
 
 > Live "Send Request" calls go straight from the browser to the API. If they're blocked by CORS, enable CORS on the API for this origin, or add a `proxyUrl` in `docs/index.html` (note: a proxy routes request bodies through a third party — avoid for sensitive data).
