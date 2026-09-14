@@ -6,8 +6,9 @@ Interactive reference for the `v1/conversations/*` endpoints, rendered with [Sca
 
 ## Files
 
-- `docs/index.html` — Scalar, loaded from CDN, pointed at `docs/openapi.json`.
+- `docs/index.html` — Scalar, loaded from CDN, pointed at `docs/openapi.json`. The reference.
 - `docs/openapi.json` — a self-contained, conversations-only OpenAPI 3.1 spec: the 5 partner-facing endpoints, the schemas they use, and the event contract, with descriptions and examples written for these docs.
+- `docs/guide.md` — the Integration Guide (served at `/guide.html` via GitHub Pages' built-in Jekyll rendering): environments, authentication, end-to-end `curl` walkthrough, event-handling rules, error table, first-integration checklist. This is the single document to hand a new partner or UI team, together with their credentials.
 
 ## Provenance
 
