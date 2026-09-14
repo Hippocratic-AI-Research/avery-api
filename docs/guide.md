@@ -10,11 +10,20 @@ _Verified against the deployed implementation on 2026-09-14._
 
 ## 1. Environments
 
-| Environment | API base URL | Token endpoint | `audience` |
-|---|---|---|---|
-| **Safety Portal** (sandbox / demo) | `https://api.safetyportal.hippocraticai.com` | `https://hai-dev-integrations.us.auth0.com/oauth/token` | `https://api.staging.hippocraticdev.com` |
-| **UAT** | `https://uat-api.portal.us.hippocraticai.com` | `https://hai-prod-integrations.us.auth0.com/oauth/token` | `https://uat.api.hippocraticai.com` |
-| **Production** | `https://api.portal.us.hippocraticai.com` | `https://hai-prod-integrations.us.auth0.com/oauth/token` | `https://api.hippocraticai.com` |
+**Safety Portal** — sandbox / demo
+- API base URL: `https://api.safetyportal.hippocraticai.com`
+- Token endpoint: `https://hai-dev-integrations.us.auth0.com/oauth/token`
+- `audience`: `https://api.staging.hippocraticdev.com`
+
+**UAT**
+- API base URL: `https://uat-api.portal.us.hippocraticai.com`
+- Token endpoint: `https://hai-prod-integrations.us.auth0.com/oauth/token`
+- `audience`: `https://uat.api.hippocraticai.com`
+
+**Production**
+- API base URL: `https://api.portal.us.hippocraticai.com`
+- Token endpoint: `https://hai-prod-integrations.us.auth0.com/oauth/token`
+- `audience`: `https://api.hippocraticai.com`
 
 Each environment has its own `client_id` / `client_secret` (provided by Hippocratic AI at onboarding — store them in a secret manager) and its own agents, scripts and patients. A token minted for one environment is rejected by the others: the `audience` and issuer must match.
 
