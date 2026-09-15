@@ -14,7 +14,7 @@ Interactive reference for the `v1/conversations/*` endpoints, rendered with [Sca
 
 Endpoint paths, methods, field names, types, required/nullable flags, enums and event shapes are taken from the service's generated OpenAPI source. Descriptions of runtime behaviour (which error codes each endpoint emits, status/role/disposition values, idempotency semantics, which events are emitted today) were verified against the implementation on the date noted at the bottom of the spec's `info.description`.
 
-Not included on purpose: non-production test endpoints, and partner-specific onboarding details (token endpoints, credentials). Those are provided directly to each integrating partner.
+Not included on purpose: non-production test endpoints, credentials, partner-specific IDs and patient data. Those are provided directly to each integrating partner during onboarding.
 
 ## Local preview
 
@@ -24,4 +24,4 @@ Not included on purpose: non-production test endpoints, and partner-specific onb
 
 `docs/openapi.json` is hand-maintained and does not auto-sync from the service. When the conversations contract changes upstream, regenerate the upstream spec, diff the `/v1/conversations*` paths and their schemas against this file, and carry the changes over — keeping the descriptions and examples here. Update the verification date in `info.description`. The page re-renders automatically on merge to `main`; there is no build step.
 
-> Live "Send Request" calls go straight from the browser to the API. If they're blocked by CORS, enable CORS on the API for this origin, or add a `proxyUrl` in `docs/index.html` (note: a proxy routes request bodies through a third party — avoid for sensitive data).
+> Live "Send Request" calls go straight from the browser to the API. Do not paste production bearer tokens or PHI into hosted docs pages. If requests are blocked by CORS, prefer testing from a trusted backend, `curl` or Postman; avoid documentation proxies for sensitive data because they route request bodies through a third party.

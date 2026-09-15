@@ -4,6 +4,8 @@ The `/v1/conversations` endpoints let your application run a turn-based text con
 
 This guide covers environments, authentication, the end-to-end flow with working `curl` examples, and the behaviors your client must handle. The full endpoint/schema reference (every field, every error code, interactive "try it") is the published API reference: **https://hippocratic-ai-research.github.io/avery-api/**
 
+Security note: mint tokens from your server-side application only. Do not put `client_secret` values, bearer tokens, production patient data or PHI into browser/mobile code or hosted documentation pages.
+
 _Verified against the deployed implementation on 2026-09-14._
 
 ---
@@ -49,6 +51,8 @@ Before the first conversation can be created in an environment you need, from Hi
 
 All requests carry an OAuth 2.0 client-credentials bearer token: `Authorization: Bearer <token>`.
 
+Because this flow uses a `client_secret`, token minting belongs in your backend or another trusted server-side environment. Frontend chat clients should call your backend, and your backend should call the Conversations API.
+
 Scopes:
 
 | Scope | Grants |
@@ -80,7 +84,7 @@ curl -s -H "Authorization: Bearer $TOKEN" "$API_BASE/v1/whoami"
 ```json
 {
   "auth_type": "client_credentials",
-  "partner_id": "6b4ac5b5-3821-457e-9341-2b1a9829d1e6",
+  "partner_id": "00000000-0000-4000-8000-000000000000",
   "partner_name": "Example Health",
   "credential_id": null,
   "client_id": "<your client_id>",
