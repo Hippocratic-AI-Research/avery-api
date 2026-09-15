@@ -422,7 +422,7 @@
         "type": "http",
         "scheme": "bearer",
         "bearerFormat": "JWT",
-        "description": "OAuth 2.0 client-credentials access token, sent as `Authorization: Bearer <token>`. Obtain it from the token endpoint provided at onboarding using your `client_id` / `client_secret`; tokens are short-lived, so refresh on `401`. Scopes: `read:chat_messages` for GET endpoints, `write:chat_messages` for POST endpoints."
+        "description": "OAuth 2.0 client-credentials access token, sent as `Authorization: Bearer <token>`. Obtain it from the token endpoint provided at onboarding using your `client_id` / `client_secret`; tokens are short-lived, so refresh on `401`. Because this flow uses a client secret, mint tokens only from a trusted backend or server-side environment. Scopes: `read:chat_messages` for GET endpoints, `write:chat_messages` for POST endpoints."
       }
     },
     "schemas": {
