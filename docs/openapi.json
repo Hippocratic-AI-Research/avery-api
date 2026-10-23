@@ -104,6 +104,15 @@
                 "schema": { "$ref": "#/components/schemas/ConversationError" }
               }
             }
+          },
+          "503": {
+            "description": "Nothing was created. `server_at_capacity` — no server has room for another conversation; retry after `Retry-After` seconds. `server_shutting_down` — servers are restarting; back off and retry. `service_in_maintenance` — planned maintenance; retry after minutes, not seconds.",
+            "headers": { "Retry-After": { "$ref": "#/components/headers/RetryAfter" } },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConversationError" }
+              }
+            }
           }
         }
       }
@@ -141,7 +150,7 @@
             }
           },
           "400": {
-            "description": "`message_invalid` — `text` is empty or otherwise unacceptable. Also returned (as `{ \"error\": \"...\" }`) when `conversation_id` is not a valid UUID.",
+            "description": "`message_invalid` — the message was rejected. Also returned (as `{ \"error\": \"...\" }`) when `conversation_id` is not a valid UUID. Blank `text` is a `422`, not a `400`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -173,7 +182,8 @@
             }
           },
           "409": {
-            "description": "`conversation_not_active` — the conversation has ended. `message_processing_busy` — another turn is in flight; retry shortly. `duplicate_message` — this `idempotency_key` was already used and the original turn did not complete successfully. `idempotency_key_reused` — this `idempotency_key` was already used with different `text`.",
+            "description": "`conversation_not_active` — the conversation has ended. `message_processing_busy` — another turn is in flight; retry with the same `idempotency_key` after `Retry-After` seconds (sent only with this code). `duplicate_message` — this `idempotency_key` was already used and the original turn did not complete successfully. `idempotency_key_reused` — this `idempotency_key` was already used with different `text`.",
+            "headers": { "Retry-After": { "$ref": "#/components/headers/RetryAfter" } },
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/ConversationError" }
@@ -197,7 +207,8 @@
             }
           },
           "503": {
-            "description": "`conversation_runtime_unavailable` or `server_shutting_down` — the conversation cannot be served right now. Transient; back off and retry.",
+            "description": "The conversation cannot be served right now. `conversation_runtime_unavailable`, `server_shutting_down` — transient; back off and retry. `server_at_capacity` — no room to resume this conversation; retry after `Retry-After` seconds. `service_in_maintenance` — planned maintenance; retry after minutes, not seconds.",
+            "headers": { "Retry-After": { "$ref": "#/components/headers/RetryAfter" } },
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/ConversationError" }
@@ -324,7 +335,8 @@
             }
           },
           "409": {
-            "description": "`message_processing_busy` — a turn is still in flight; retry shortly and the end will be applied.",
+            "description": "`message_processing_busy` — a turn is still in flight. Returned immediately; retry after `Retry-After` seconds and the end will be applied.",
+            "headers": { "Retry-After": { "$ref": "#/components/headers/RetryAfter" } },
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/ConversationError" }
@@ -348,7 +360,7 @@
             }
           },
           "503": {
-            "description": "`conversation_runtime_unavailable` or `server_shutting_down` — transient; back off and retry.",
+            "description": "`conversation_runtime_unavailable` or `server_shutting_down` — transient; back off and retry. `service_in_maintenance` — planned maintenance; retry after minutes, not seconds.",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/ConversationError" }
@@ -417,6 +429,12 @@
     }
   },
   "components": {
+    "headers": {
+      "RetryAfter": {
+        "description": "Seconds to wait before retrying. Sent with `409 message_processing_busy` (1) and `503 server_at_capacity` (5).",
+        "schema": { "type": "integer", "minimum": 1 }
+      }
+    },
     "securitySchemes": {
       "bearerAuth": {
         "type": "http",
@@ -953,7 +971,7 @@
       "ConversationError": {
         "type": "object",
         "title": "ConversationError",
-        "description": "Standard error body. `error_code` is stable and safe to branch on; `message` is for humans and may change. Codes in use: `missing_partner`, `patient_not_found`, `conversation_not_found`, `conversation_not_active`, `conversation_not_ended`, `conversation_runtime_unavailable`, `conversation_end_failed`, `prerequisite_data_unavailable`, `llm_conversation_creation_failed`, `preparation_failed`, `unsupported_script_configuration`, `server_shutting_down`, `message_processing_busy`, `message_processing_failed`, `message_invalid`, `duplicate_message`, `idempotency_key_reused`, `history_replay_failed`. Treat unknown codes as a generic failure for the returned HTTP status.",
+        "description": "Standard error body. `error_code` is stable and safe to branch on; `message` is for humans and may change. Codes in use: `missing_partner`, `patient_not_found`, `conversation_not_found`, `conversation_not_active`, `conversation_not_ended`, `conversation_runtime_unavailable`, `conversation_end_failed`, `prerequisite_data_unavailable`, `llm_conversation_creation_failed`, `preparation_failed`, `unsupported_script_configuration`, `server_shutting_down`, `server_at_capacity`, `service_in_maintenance`, `message_processing_busy`, `message_processing_failed`, `message_invalid`, `duplicate_message`, `idempotency_key_reused`, `history_replay_failed`. Treat unknown codes as a generic failure for the returned HTTP status.",
         "required": ["error_code", "message"],
         "properties": {
           "error_code": {
