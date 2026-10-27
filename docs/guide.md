@@ -139,7 +139,7 @@ curl -s -X POST "$API_BASE/v1/conversations" \
 
 Show `greeting.text` as the first assistant message. Store `conversation_id`.
 
-Errors: `400 unsupported_script_configuration`, `404 patient_not_found`, `500 prerequisite_data_unavailable | preparation_failed | llm_conversation_creation_failed` (nothing was created; safe to retry), `503 server_at_capacity | server_shutting_down | service_in_maintenance` (nothing was created; see §6 for when to retry).
+Errors: `400 unsupported_script_configuration`, `404 patient_not_found`, `500 prerequisite_data_unavailable | preparation_failed | llm_conversation_creation_failed` (nothing was created; safe to retry), `429 rate_limited`, `503 server_at_capacity | server_shutting_down | service_in_maintenance | rate_limit_unavailable` (nothing was created; see §6 for when to retry).
 
 ### 4.2 Send a message
 
@@ -170,7 +170,7 @@ curl -s -X POST "$API_BASE/v1/conversations/5c1a0b2d-3e4f-4a5b-8c6d-7e8f9a0b1c2d
 
 **Retries:** always send an `idempotency_key` (a fresh UUID per user message). If you lose the response and retry with the same key and text, you get the **original reply and events back unchanged** — the turn is never re-run. Reusing a key with different text is rejected (`409 idempotency_key_reused`); a key whose original turn failed is rejected (`409 duplicate_message`) — mint a new key and resend.
 
-Errors: `422` (missing or blank `text`), `404 conversation_not_found`, `409 conversation_not_active | message_processing_busy | duplicate_message | idempotency_key_reused`, `500 message_processing_failed` (check history before resending), `503 conversation_runtime_unavailable | server_shutting_down | server_at_capacity | service_in_maintenance` (see §6 for when to retry).
+Errors: `422` (missing or blank `text`), `404 conversation_not_found`, `409 conversation_not_active | message_processing_busy | duplicate_message | idempotency_key_reused`, `500 message_processing_failed` (check history before resending), `429 rate_limited` (retry with the same `idempotency_key`), `503 conversation_runtime_unavailable | server_shutting_down | server_at_capacity | service_in_maintenance | rate_limit_unavailable` (see §6 for when to retry).
 
 ### 4.3 Read status and history
 
@@ -223,7 +223,7 @@ curl -s -X POST "$API_BASE/v1/conversations/5c1a0b2d-3e4f-4a5b-8c6d-7e8f9a0b1c2d
 - Ending an already-ended conversation is idempotent (`200`, same disposition).
 - The `disposition` object in the reference is **not populated today** and is omitted from responses. Don't depend on it.
 
-Errors: `404 conversation_not_found`, `409 message_processing_busy` (a turn is in flight; returns immediately with `Retry-After: 1`, so retry after that delay), `500 conversation_end_failed`, `503 service_in_maintenance | conversation_runtime_unavailable` (see §6).
+Errors: `404 conversation_not_found`, `409 message_processing_busy` (a turn is in flight; returns immediately with `Retry-After: 1`, so retry after that delay), `500 conversation_end_failed`, `429 rate_limited`, `503 service_in_maintenance | conversation_runtime_unavailable | rate_limit_unavailable` (see §6). Ending an already-ended conversation is never rate limited.
 
 ### 4.5 Read the transcript
 
@@ -284,7 +284,7 @@ Every error except auth and malformed-id returns:
 
 Branch on `error_code` (stable); never parse `message`. Treat unknown codes as a generic failure for that HTTP status.
 
-When a `409` or `503` carries a `Retry-After` header (seconds), wait at least that long before retrying. Today that's `Retry-After: 1` on `409 message_processing_busy` and `Retry-After: 5` on `503 server_at_capacity`. Retry sends with the same `idempotency_key`.
+When a `409` or `503` carries a `Retry-After` header (seconds), wait at least that long before retrying. Today that's `Retry-After: 1` on `409 message_processing_busy`, `Retry-After: 5` on `503 server_at_capacity` and `503 rate_limit_unavailable`, and a variable wait on `429 rate_limited`. Retry sends with the same `idempotency_key`.
 
 | HTTP | Codes | Client action |
 |---|---|---|
@@ -294,8 +294,9 @@ When a `409` or `503` carries a `Retry-After` header (seconds), wait at least th
 | `404` | `conversation_not_found`, `patient_not_found`, `conversation_runtime_unavailable` | Check ids / patient loaded / conversation still resumable |
 | `409` | `conversation_not_active`, `conversation_not_ended`, `message_processing_busy`, `duplicate_message`, `idempotency_key_reused` | See §4.2 / §4.5 |
 | `422` | *(array of field errors)*, e.g. missing or blank `text` | Fix the request body |
+| `429` | `rate_limited` | Service-wide request limit reached. Wait `Retry-After` seconds, then retry (sends with the same `idempotency_key`) |
 | `500` | `message_processing_failed`, `conversation_end_failed`, `history_replay_failed`, `prerequisite_data_unavailable`, `preparation_failed`, `llm_conversation_creation_failed` | Retry once; for sends, check history first |
-| `503` | `server_at_capacity`, `server_shutting_down`, `conversation_runtime_unavailable` | Transient. Wait `Retry-After` seconds when present, otherwise back off, then retry |
+| `503` | `server_at_capacity`, `server_shutting_down`, `conversation_runtime_unavailable`, `rate_limit_unavailable` | Transient. Wait `Retry-After` seconds when present, otherwise back off, then retry |
 | `503` | `service_in_maintenance` | Planned maintenance. Retry after minutes, not seconds; reading history and transcripts still works |
 
 ## 7. Checklist for a first integration
@@ -304,7 +305,7 @@ When a `409` or `503` carries a `Retry-After` header (seconds), wait at least th
 - [ ] Create a conversation for a loaded test patient; display `greeting.text`.
 - [ ] Send messages with a fresh `idempotency_key` each; render `text`; handle `events`.
 - [ ] Enforce one in-flight send per conversation; retry `409 message_processing_busy` after its `Retry-After`.
-- [ ] Honor `Retry-After` on `503`; back off much longer on `503 service_in_maintenance`.
+- [ ] Honor `Retry-After` on `429` and `503`; back off much longer on `503 service_in_maintenance`.
 - [ ] Handle `escalation` (incl. rule 3), `transfer_to_human`, `end_call` per §5.
 - [ ] On any dropped response, recover from `GET /v1/conversations/{id}`.
 - [ ] End with `reason`; read `call_disposition`; fetch the transcript.
