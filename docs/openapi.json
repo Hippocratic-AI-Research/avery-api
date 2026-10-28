@@ -97,6 +97,15 @@
               }
             }
           },
+          "429": {
+            "description": "`rate_limited` — the service-wide request limit was reached. Retry after `Retry-After` seconds (for sends, with the same `idempotency_key`). Replays of a completed message and repeated ends are never rate limited.",
+            "headers": { "Retry-After": { "$ref": "#/components/headers/RetryAfter" } },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConversationError" }
+              }
+            }
+          },
           "500": {
             "description": "`prerequisite_data_unavailable` (patient, script or agent data could not be loaded), `preparation_failed`, or `llm_conversation_creation_failed`. Nothing was created; the request may be retried.",
             "content": {
@@ -106,7 +115,7 @@
             }
           },
           "503": {
-            "description": "Nothing was created. `server_at_capacity` — no server has room for another conversation; retry after `Retry-After` seconds. `server_shutting_down` — servers are restarting; back off and retry. `service_in_maintenance` — planned maintenance; retry after minutes, not seconds.",
+            "description": "Nothing was created. `server_at_capacity` — no server has room for another conversation; retry after `Retry-After` seconds. `server_shutting_down` — servers are restarting; back off and retry. `service_in_maintenance` — planned maintenance; retry after minutes, not seconds. `rate_limit_unavailable` — the request limit could not be checked; retry after `Retry-After` seconds.",
             "headers": { "Retry-After": { "$ref": "#/components/headers/RetryAfter" } },
             "content": {
               "application/json": {
@@ -198,6 +207,15 @@
               }
             }
           },
+          "429": {
+            "description": "`rate_limited` — the service-wide request limit was reached. Retry after `Retry-After` seconds (for sends, with the same `idempotency_key`). Replays of a completed message and repeated ends are never rate limited.",
+            "headers": { "Retry-After": { "$ref": "#/components/headers/RetryAfter" } },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConversationError" }
+              }
+            }
+          },
           "500": {
             "description": "`message_processing_failed` or `preparation_failed` — the turn could not be completed. The message may or may not have been recorded; check `GET /v1/conversations/{conversation_id}` before resending.",
             "content": {
@@ -207,7 +225,7 @@
             }
           },
           "503": {
-            "description": "The conversation cannot be served right now. `conversation_runtime_unavailable`, `server_shutting_down` — transient; back off and retry. `server_at_capacity` — no room to resume this conversation; retry after `Retry-After` seconds. `service_in_maintenance` — planned maintenance; retry after minutes, not seconds.",
+            "description": "The conversation cannot be served right now. `conversation_runtime_unavailable`, `server_shutting_down` — transient; back off and retry. `server_at_capacity` — no room to resume this conversation; retry after `Retry-After` seconds. `service_in_maintenance` — planned maintenance; retry after minutes, not seconds. `rate_limit_unavailable` — the request limit could not be checked; retry after `Retry-After` seconds.",
             "headers": { "Retry-After": { "$ref": "#/components/headers/RetryAfter" } },
             "content": {
               "application/json": {
@@ -351,6 +369,15 @@
               }
             }
           },
+          "429": {
+            "description": "`rate_limited` — the service-wide request limit was reached. Retry after `Retry-After` seconds (for sends, with the same `idempotency_key`). Replays of a completed message and repeated ends are never rate limited.",
+            "headers": { "Retry-After": { "$ref": "#/components/headers/RetryAfter" } },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConversationError" }
+              }
+            }
+          },
           "500": {
             "description": "`conversation_end_failed` — the conversation could not be ended. Retry, then check `GET /v1/conversations/{conversation_id}` for its status.",
             "content": {
@@ -360,7 +387,8 @@
             }
           },
           "503": {
-            "description": "`conversation_runtime_unavailable` or `server_shutting_down` — transient; back off and retry. `service_in_maintenance` — planned maintenance; retry after minutes, not seconds.",
+            "description": "`conversation_runtime_unavailable` or `server_shutting_down` — transient; back off and retry. `service_in_maintenance` — planned maintenance; retry after minutes, not seconds. `rate_limit_unavailable` — the request limit could not be checked; retry after `Retry-After` seconds.",
+            "headers": { "Retry-After": { "$ref": "#/components/headers/RetryAfter" } },
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/ConversationError" }
@@ -431,7 +459,7 @@
   "components": {
     "headers": {
       "RetryAfter": {
-        "description": "Seconds to wait before retrying. Sent with `409 message_processing_busy` (1) and `503 server_at_capacity` (5).",
+        "description": "Seconds to wait before retrying. Sent with `409 message_processing_busy` (1), `503 server_at_capacity` (5), `503 rate_limit_unavailable` (5), and `429 rate_limited` (until the limit frees up).",
         "schema": { "type": "integer", "minimum": 1 }
       }
     },
@@ -971,7 +999,7 @@
       "ConversationError": {
         "type": "object",
         "title": "ConversationError",
-        "description": "Standard error body. `error_code` is stable and safe to branch on; `message` is for humans and may change. Codes in use: `missing_partner`, `patient_not_found`, `conversation_not_found`, `conversation_not_active`, `conversation_not_ended`, `conversation_runtime_unavailable`, `conversation_end_failed`, `prerequisite_data_unavailable`, `llm_conversation_creation_failed`, `preparation_failed`, `unsupported_script_configuration`, `server_shutting_down`, `server_at_capacity`, `service_in_maintenance`, `message_processing_busy`, `message_processing_failed`, `message_invalid`, `duplicate_message`, `idempotency_key_reused`, `history_replay_failed`. Treat unknown codes as a generic failure for the returned HTTP status.",
+        "description": "Standard error body. `error_code` is stable and safe to branch on; `message` is for humans and may change. Codes in use: `missing_partner`, `patient_not_found`, `conversation_not_found`, `conversation_not_active`, `conversation_not_ended`, `conversation_runtime_unavailable`, `conversation_end_failed`, `prerequisite_data_unavailable`, `llm_conversation_creation_failed`, `preparation_failed`, `unsupported_script_configuration`, `server_shutting_down`, `server_at_capacity`, `service_in_maintenance`, `rate_limited`, `rate_limit_unavailable`, `message_processing_busy`, `message_processing_failed`, `message_invalid`, `duplicate_message`, `idempotency_key_reused`, `history_replay_failed`. Treat unknown codes as a generic failure for the returned HTTP status.",
         "required": ["error_code", "message"],
         "properties": {
           "error_code": {
